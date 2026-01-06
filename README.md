@@ -35,7 +35,7 @@ Data persists in a named Docker volume at `/data` inside the container.
 ## Create a Book
 
 - Visit `http://localhost:8000` and create a Book.
-- Note the Book ID from the URL (e.g., `/books/1` → Book ID `1`).
+- Note the Book ID from the URL (e.g., `/books/1` -> Book ID `1`).
 
 ## Capture a Reading List (Update Book)
 
@@ -54,10 +54,10 @@ Data persists in a named Docker volume at `/data` inside the container.
    - Images are inlined as data URLs when possible to preserve charts behind logins.
    - Byline, published time, section, and reading time are shown when available.
 
-## Build Today’s Issue
+## Build Today's Issue
 
-- From the extension popup, click **Build Today’s Issue**, or
-- From the host UI, click **Build Today’s Issue** on the Book page.
+- From the extension popup, click **Build Today's Issue**, or
+- From the host UI, click **Build Today's Issue** on the Book page.
 
 The issue EPUB is generated per Book per calendar day and updated with new chapters when new articles arrive (deduped by URL + content hash).
 
@@ -71,6 +71,11 @@ The issue EPUB is generated per Book per calendar day and updated with new chapt
 ```bash
 curl -H "X-API-Token: changeme" http://localhost:8000/api/books
 ```
+
+## Reading Time + Scene Breaks
+
+- Reading time defaults to 230 WPM. Override with `READING_WPM` in the API container environment.
+- Scene breaks are normalized to a visible `* * *` marker when an article contains empty paragraphs, `<hr>`, or `***`.
 
 ## Crosspoint-reader Notes
 

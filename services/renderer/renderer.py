@@ -12,6 +12,8 @@ import requests
 from ebooklib import epub
 from dateutil import parser, tz
 
+SCENE_BREAK_MARKER = "* * *"
+
 ALLOWED_TAGS = bleach.sanitizer.ALLOWED_TAGS.union(
     {
         "article",
@@ -71,6 +73,7 @@ div.meta {
 }
 div.meta-line { margin: 0.2em 0; }
 p.meta-excerpt { margin: 0.4em 0 0; font-style: italic; color: #555; }
+p.scene-break { text-align: center; letter-spacing: 0.2em; margin: 1em 0; }
 figure {
   margin: 0.8em 0;
   break-inside: avoid;
@@ -155,14 +158,45 @@ def _format_published_at(raw: Optional[str]) -> Optional[str]:
     return localized.strftime("%b %d, %Y %I:%M %p")
 
 
-def _estimate_reading_time(text_content: Optional[str], *, wpm: int = 230) -> Optional[str]:
+def _reading_wpm() -> int:
+    raw = os.environ.get("READING_WPM", "230").strip()
+    try:
+        wpm = int(raw)
+    except ValueError:
+        return 230
+    return max(120, min(400, wpm))
+
+
+def _estimate_reading_time(text_content: Optional[str], *, wpm: Optional[int] = None) -> Optional[str]:
     if not text_content:
         return None
     words = len(re.findall(r"\b\w+\b", text_content))
     if not words:
         return None
-    minutes = max(1, int(math.ceil(words / wpm)))
+    effective_wpm = wpm or _reading_wpm()
+    minutes = max(1, int(math.ceil(words / effective_wpm)))
     return f"{minutes} min read"
+
+
+def _normalize_scene_breaks(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    marker = f'<p class="scene-break">{SCENE_BREAK_MARKER}</p>'
+    content_html = re.sub(r"<hr[^>]*>", marker, content_html, flags=re.IGNORECASE)
+    content_html = re.sub(
+        r"<p[^>]*>(?:\s|&nbsp;|&#160;|<br\s*/?>)*</p>",
+        marker,
+        content_html,
+        flags=re.IGNORECASE,
+    )
+    content_html = re.sub(
+        r"<p[^>]*>\s*(?:\* ?\* ?\*|-{3,}|- - -)\s*</p>",
+        marker,
+        content_html,
+        flags=re.IGNORECASE,
+    )
+    content_html = re.sub(rf"(?:{re.escape(marker)}\s*){{2,}}", marker, content_html)
+    return content_html
 
 
 def _render_metadata(
@@ -251,7 +285,7 @@ def build_issue_epub(
 
     for idx, chapter in enumerate(chapters, start=1):
         chapter_title = chapter["title"]
-        content_html = chapter["content_html"]
+        content_html = _normalize_scene_breaks(chapter["content_html"])
         meta_html = _render_metadata(
             byline=chapter.get("byline"),
             excerpt=chapter.get("excerpt"),
