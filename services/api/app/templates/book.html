@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>{{ book.name }}</h2>
+  <p class="muted">Source: {{ book.source_url or "" }}</p>
+  <form method="post" action="/books/{{ book.id }}/build">
+    <button type="submit">Build Today's Issue</button>
+  </form>
+  {% if issue %}
+    <p>Latest issue: {{ issue.title }} — <a href="/download/{{ issue.id }}.epub">Download EPUB</a></p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h3>Latest Snapshot Items</h3>
+  {% if items %}
+    <ul class="list">
+      {% for item in items %}
+        <li>
+          <a href="{{ item.url }}" target="_blank">{{ item.title }}</a>
+          <span class="muted">{{ item.ts or "" }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No snapshot items yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h3>Captured Articles</h3>
+  {% if articles %}
+    <ul class="list">
+      {% for article in articles %}
+        <li>
+          <strong>{{ article.title }}</strong>
+          <span class="muted">{{ article.url }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No articles captured yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

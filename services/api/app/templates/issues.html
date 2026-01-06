@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Issues</h2>
+  {% if issues %}
+    <ul class="list">
+      {% for issue in issues %}
+        <li>
+          <strong>{{ issue.title }}</strong>
+          <span class="muted">{{ issue.book_name }}</span>
+          <a href="/download/{{ issue.id }}.epub">Download</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No issues yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
