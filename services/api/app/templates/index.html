@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Create Book</h2>
+  <form method="post" action="/books/create" class="form">
+    <label>
+      Name
+      <input type="text" name="name" required />
+    </label>
+    <label>
+      Source URL
+      <input type="url" name="source_url" />
+    </label>
+    <button type="submit">Create</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Books</h2>
+  {% if books %}
+    <ul class="list">
+      {% for book in books %}
+        <li>
+          <a href="/books/{{ book.id }}">{{ book.name }}</a>
+          <span class="muted">{{ book.source_url or "" }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No books yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

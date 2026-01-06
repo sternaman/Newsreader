@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ./services/api
+    ports:
+      - "8000:8000"
+    environment:
+      - API_TOKEN=${API_TOKEN:-changeme}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - data:/data
+
+volumes:
+  data:
