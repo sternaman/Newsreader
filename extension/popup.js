@@ -8,6 +8,17 @@ const setStatus = (msg) => {
   statusEl.textContent = msg;
 };
 
+const normalizeHost = (value) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return `http://${trimmed.replace(/^\/+/, "")}`.replace(/\/+$/, "");
+  }
+  return trimmed.replace(/\/+$/, "");
+};
+
 const loadConfig = async () => {
   const config = await chrome.storage.sync.get(["host", "token", "bookId", "bulkCapture"]);
   hostInput.value = config.host || "http://localhost:8000";
@@ -18,7 +29,7 @@ const loadConfig = async () => {
 
 const saveConfig = async () => {
   await chrome.storage.sync.set({
-    host: hostInput.value.trim(),
+    host: normalizeHost(hostInput.value),
     token: tokenInput.value.trim(),
     bookId: bookInput.value.trim(),
     bulkCapture: bulkCheckbox.checked
@@ -27,7 +38,14 @@ const saveConfig = async () => {
 };
 
 const sendAction = async (action) => {
-  const config = await chrome.storage.sync.get(["host", "token", "bookId"]);
+  const stored = await chrome.storage.sync.get(["host", "token", "bookId"]);
+  const config = {
+    host: normalizeHost(hostInput.value) || stored.host || "http://localhost:8000",
+    token: tokenInput.value.trim() || stored.token || "changeme",
+    bookId: bookInput.value.trim() || stored.bookId || "",
+    bulkCapture: bulkCheckbox.checked
+  };
+  await chrome.storage.sync.set(config);
   if (!config.bookId) {
     setStatus("Set a Book ID first.");
     return;
