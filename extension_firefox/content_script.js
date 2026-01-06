@@ -1,10 +1,84 @@
+const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
+
+const isWsjHost = (hostname) => hostname === "wsj.com" || hostname.endsWith(".wsj.com");
+
+const isLikelyWsjArticleUrl = (url) => {
+  if (!isWsjHost(url.hostname)) {
+    return false;
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  if (!path || path === "/") {
+    return false;
+  }
+  if (path.startsWith("/video") || path.startsWith("/podcasts") || path.startsWith("/livecoverage")) {
+    return false;
+  }
+  const mod = url.searchParams.get("mod");
+  if (mod && mod.startsWith("nav")) {
+    return false;
+  }
+  if (path.includes("/articles/")) {
+    return true;
+  }
+  const last = path.split("/").filter(Boolean).pop() || "";
+  if (last.length < 12 || last.split("-").length < 3) {
+    return false;
+  }
+  if (/news|markets|opinion|personal-finance|real-estate|lifestyle|business|world|economy|tech|arts|sports|science|us/i.test(last)) {
+    return false;
+  }
+  return true;
+};
+
+const extractWsjFrontPageItems = () => {
+  const main = document.querySelector("main") || document.body;
+  const links = Array.from(main.querySelectorAll("a[href]"));
+  const seen = new Set();
+  const items = [];
+  for (const link of links) {
+    if (link.closest("nav, header, footer, aside")) {
+      continue;
+    }
+    const href = link.getAttribute("href");
+    if (!href) {
+      continue;
+    }
+    let url;
+    try {
+      url = new URL(href, window.location.href);
+    } catch (error) {
+      continue;
+    }
+    if (!isLikelyWsjArticleUrl(url)) {
+      continue;
+    }
+    const title = normalizeText(link.textContent || "");
+    if (title.length < 20) {
+      continue;
+    }
+    const key = `${url.origin}${url.pathname}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    items.push({ title, url: url.toString() });
+  }
+  return items;
+};
+
 const extractListItems = () => {
+  if (isWsjHost(window.location.hostname)) {
+    const wsjItems = extractWsjFrontPageItems();
+    if (wsjItems.length > 0) {
+      return wsjItems;
+    }
+  }
   const links = Array.from(document.querySelectorAll("a"));
   const items = links
-    .filter((link) => link.href && link.textContent.trim().length > 8)
+    .filter((link) => link.href && normalizeText(link.textContent || "").length > 8)
     .slice(0, 100)
     .map((link) => ({
-      title: link.textContent.trim(),
+      title: normalizeText(link.textContent),
       url: link.href
     }));
   return items;
