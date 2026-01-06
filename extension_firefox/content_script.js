@@ -80,7 +80,7 @@ const extractArticle = () => {
   };
 };
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "extractList") {
     sendResponse({ items: extractListItems() });
   }

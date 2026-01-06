@@ -93,6 +93,13 @@ def _build_issue(book_id: int):
                     "title": row["title"],
                     "content_html": content,
                     "article_id": row["id"],
+                    "byline": row["byline"],
+                    "excerpt": row["excerpt"],
+                    "published_at_raw": row["published_at_raw"],
+                    "source_domain": row["source_domain"],
+                    "url": row["url"],
+                    "text_content": row["text_content"],
+                    "section": row["section"],
                 }
             )
 
@@ -259,7 +266,7 @@ async def ingest_article(book_id: int, payload: dict):
         if existing:
             return {"status": "duplicate", "article_id": existing["id"]}
         conn.execute(
-            "INSERT INTO articles (book_id, url, title, byline, excerpt, content_html, source_domain, published_at_raw, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO articles (book_id, url, title, byline, excerpt, content_html, source_domain, published_at_raw, text_content, section, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 book_id,
                 url,
@@ -269,6 +276,8 @@ async def ingest_article(book_id: int, payload: dict):
                 content_html,
                 payload.get("source_domain"),
                 payload.get("published_at_raw"),
+                payload.get("text_content"),
+                payload.get("section"),
                 content_hash,
                 now,
             ),

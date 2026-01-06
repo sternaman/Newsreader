@@ -3,7 +3,8 @@ version: "3.9"
 services:
   api:
     build:
-      context: ./services/api
+      context: ./services
+      dockerfile: api/Dockerfile
     ports:
       - "8000:8000"
     environment:

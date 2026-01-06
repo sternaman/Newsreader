@@ -61,6 +61,15 @@ def init_db() -> None:
             );
             """
         )
+        _ensure_article_columns(conn)
+
+
+def _ensure_article_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
+    if "text_content" not in existing:
+        conn.execute("ALTER TABLE articles ADD COLUMN text_content TEXT")
+    if "section" not in existing:
+        conn.execute("ALTER TABLE articles ADD COLUMN section TEXT")
 
 
 @contextmanager

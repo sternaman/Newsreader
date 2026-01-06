@@ -75,42 +75,28 @@ const inlineImages = async (html, baseUrl) => {
 };
 
 const extractListFromTab = async (tabId) => {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { action: "extractList" }, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(response?.items || []);
-      }
-    });
-  });
+  const response = await browser.tabs.sendMessage(tabId, { action: "extractList" });
+  return response?.items || [];
 };
 
 const captureArticleFromTab = async (tabId) => {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { action: "captureArticle" }, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(response?.article);
-      }
-    });
-  });
+  const response = await browser.tabs.sendMessage(tabId, { action: "captureArticle" });
+  return response?.article;
 };
 
 const waitForTabLoad = (tabId) => {
   return new Promise((resolve, reject) => {
     const listener = (updatedTabId, info) => {
       if (updatedTabId === tabId && info.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener);
+        browser.tabs.onUpdated.removeListener(listener);
         resolve();
       }
     };
     const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
+      browser.tabs.onUpdated.removeListener(listener);
       reject(new Error("Timeout waiting for load"));
     }, 20000);
-    chrome.tabs.onUpdated.addListener(listener);
+    browser.tabs.onUpdated.addListener(listener);
   });
 };
 
@@ -123,7 +109,7 @@ const bulkCapture = async (items, config) => {
   for (const item of limited) {
     let tab = null;
     try {
-      tab = await chrome.tabs.create({ url: item.url, active: false });
+      tab = await browser.tabs.create({ url: item.url, active: false });
       await waitForTabLoad(tab.id);
       const article = await captureArticleFromTab(tab.id);
       if (!article || !article.content_html) {
@@ -146,7 +132,7 @@ const bulkCapture = async (items, config) => {
       results.push({ url: item.url, status: "error", error: error.message });
     } finally {
       if (tab?.id) {
-        await chrome.tabs.remove(tab.id);
+        await browser.tabs.remove(tab.id);
       }
     }
     await sleep(DEFAULT_THROTTLE_MS);
@@ -154,67 +140,58 @@ const bulkCapture = async (items, config) => {
   return results;
 };
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener(async (message) => {
   const { action, config, bulkCapture: shouldBulk } = message;
   if (!action) {
-    return;
+    return {};
   }
 
-  chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-    try {
-      const tab = tabs[0];
-      if (!tab) {
-        sendResponse({ error: "No active tab" });
-        return;
-      }
-
-      if (action === "updateBook") {
-        const items = await extractListFromTab(tab.id);
-        await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, config.token, {
-          items
-        });
-        if (shouldBulk) {
-          const results = await bulkCapture(items, config);
-          sendResponse({ status: `Snapshot saved. Bulk captured ${results.length} items.` });
-          return;
-        }
-        sendResponse({ status: `Snapshot saved (${items.length} items).` });
-        return;
-      }
-
-      if (action === "sendArticle") {
-        const article = await captureArticleFromTab(tab.id);
-        if (!article || !article.content_html) {
-          sendResponse({ error: "Article extraction failed" });
-          return;
-        }
-        const contentHtml = await inlineImages(article.content_html, tab.url);
-        await postJson(`${config.host}/api/books/${config.bookId}/articles/ingest`, config.token, {
-          url: tab.url,
-          title: article.title,
-          byline: article.byline,
-          excerpt: article.excerpt,
-          content_html: contentHtml,
-          source_domain: new URL(tab.url).hostname,
-          published_at_raw: article.published_at_raw || null,
-          text_content: article.text_content || null,
-          section: article.section || null
-        });
-        sendResponse({ status: "Article sent." });
-        return;
-      }
-
-      if (action === "buildIssue") {
-        await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, config.token, {});
-        sendResponse({ status: "Issue build triggered." });
-        return;
-      }
-
-      sendResponse({ error: "Unknown action" });
-    } catch (error) {
-      sendResponse({ error: error.message });
+  try {
+    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    if (!tab) {
+      return { error: "No active tab" };
     }
-  });
 
-  return true;
+    if (action === "updateBook") {
+      const items = await extractListFromTab(tab.id);
+      await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, config.token, {
+        items
+      });
+      if (shouldBulk) {
+        const results = await bulkCapture(items, config);
+        return { status: `Snapshot saved. Bulk captured ${results.length} items.` };
+      }
+      return { status: `Snapshot saved (${items.length} items).` };
+    }
+
+    if (action === "sendArticle") {
+      const article = await captureArticleFromTab(tab.id);
+      if (!article || !article.content_html) {
+        return { error: "Article extraction failed" };
+      }
+      const contentHtml = await inlineImages(article.content_html, tab.url);
+      await postJson(`${config.host}/api/books/${config.bookId}/articles/ingest`, config.token, {
+        url: tab.url,
+        title: article.title,
+        byline: article.byline,
+        excerpt: article.excerpt,
+        content_html: contentHtml,
+        source_domain: new URL(tab.url).hostname,
+        published_at_raw: article.published_at_raw || null,
+        text_content: article.text_content || null,
+        section: article.section || null
+      });
+      return { status: "Article sent." };
+    }
+
+    if (action === "buildIssue") {
+      await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, config.token, {});
+      return { status: "Issue build triggered." };
+    }
+
+    return { error: "Unknown action" };
+  } catch (error) {
+    return { error: error.message || String(error) };
+  }
 });

@@ -1,5 +1,7 @@
 import base64
 import hashlib
+import html
+import math
 import os
 import re
 from datetime import datetime
@@ -8,6 +10,7 @@ from typing import Iterable, List, Optional
 import bleach
 import requests
 from ebooklib import epub
+from dateutil import parser, tz
 
 ALLOWED_TAGS = bleach.sanitizer.ALLOWED_TAGS.union(
     {
@@ -51,13 +54,45 @@ body {
 }
 article { padding: 1em 1.4em; }
 h1, h2, h3 { font-weight: bold; margin: 1em 0 0.5em; }
-img { max-width: 100%; height: auto; }
+img {
+  max-width: 100%;
+  height: auto;
+  max-height: 65vh;
+  object-fit: contain;
+  display: block;
+  margin: 0.8em auto;
+}
+div.meta {
+  margin: 0.2em 0 1em;
+  padding-bottom: 0.6em;
+  border-bottom: 1px solid #ccc;
+  color: #444;
+  font-size: 0.9em;
+}
+div.meta-line { margin: 0.2em 0; }
+p.meta-excerpt { margin: 0.4em 0 0; font-style: italic; color: #555; }
+figure {
+  margin: 0.8em 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+figcaption {
+  font-size: 0.85em;
+  text-align: center;
+  color: #555;
+}
 blockquote { border-left: 3px solid #999; padding-left: 0.8em; color: #333; }
 """
 
 
 def sanitize_html(html: str) -> str:
-    cleaned = bleach.clean(html, tags=ALLOWED_TAGS, attributes=ALLOWED_ATTRS, strip=True)
+    cleaned = bleach.clean(
+        html,
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRS,
+        protocols=["http", "https", "mailto", "data"],
+        strip=True,
+    )
     return bleach.linkify(cleaned)
 
 
@@ -90,6 +125,96 @@ def compute_content_hash(url: str, content_html: str) -> str:
     sha.update(url.encode("utf-8"))
     sha.update(content_html.encode("utf-8"))
     return sha.hexdigest()
+
+
+def _format_byline(byline: Optional[str]) -> Optional[str]:
+    if not byline:
+        return None
+    stripped = byline.strip()
+    if not stripped:
+        return None
+    if stripped.lower().startswith("by "):
+        return stripped
+    return f"By {stripped}"
+
+
+def _format_published_at(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = parser.parse(stripped)
+    except (ValueError, TypeError):
+        return stripped
+    local_tz = tz.gettz(os.environ.get("TZ", "UTC"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=local_tz)
+    localized = parsed.astimezone(local_tz) if local_tz else parsed
+    return localized.strftime("%b %d, %Y %I:%M %p")
+
+
+def _estimate_reading_time(text_content: Optional[str], *, wpm: int = 230) -> Optional[str]:
+    if not text_content:
+        return None
+    words = len(re.findall(r"\b\w+\b", text_content))
+    if not words:
+        return None
+    minutes = max(1, int(math.ceil(words / wpm)))
+    return f"{minutes} min read"
+
+
+def _render_metadata(
+    *,
+    byline: Optional[str],
+    excerpt: Optional[str],
+    published_at_raw: Optional[str],
+    source_domain: Optional[str],
+    url: Optional[str],
+    text_content: Optional[str],
+    section: Optional[str],
+) -> str:
+    meta_primary: List[str] = []
+    meta_secondary: List[str] = []
+
+    formatted_byline = _format_byline(byline)
+    if formatted_byline:
+        meta_primary.append(html.escape(formatted_byline, quote=True))
+
+    formatted_published = _format_published_at(published_at_raw)
+    if formatted_published:
+        meta_primary.append(f"Published {html.escape(formatted_published, quote=True)}")
+
+    reading_time = _estimate_reading_time(text_content)
+    if reading_time:
+        meta_primary.append(html.escape(reading_time, quote=True))
+
+    if url:
+        label = source_domain.strip() if source_domain else url
+        safe_label = html.escape(label, quote=True)
+        safe_url = html.escape(url.strip(), quote=True)
+        meta_secondary.append(f'Source <a href="{safe_url}">{safe_label}</a>')
+    elif source_domain:
+        meta_secondary.append(f"Source {html.escape(source_domain.strip(), quote=True)}")
+
+    if section and section.strip():
+        meta_secondary.insert(0, f"Section {html.escape(section.strip(), quote=True)}")
+
+    if not meta_primary and not meta_secondary and not (excerpt and excerpt.strip()):
+        return ""
+
+    meta_lines = []
+    if meta_primary:
+        meta_lines.append(f"<div class=\"meta-line\">{' | '.join(meta_primary)}</div>")
+    if meta_secondary:
+        meta_lines.append(f"<div class=\"meta-line\">{' | '.join(meta_secondary)}</div>")
+
+    meta_excerpt = ""
+    if excerpt and excerpt.strip():
+        meta_excerpt = f"<p class=\"meta-excerpt\">{html.escape(excerpt.strip(), quote=True)}</p>"
+
+    return f"<div class=\"meta\">{''.join(meta_lines)}{meta_excerpt}</div>"
 
 
 def build_issue_epub(
@@ -127,9 +252,19 @@ def build_issue_epub(
     for idx, chapter in enumerate(chapters, start=1):
         chapter_title = chapter["title"]
         content_html = chapter["content_html"]
+        meta_html = _render_metadata(
+            byline=chapter.get("byline"),
+            excerpt=chapter.get("excerpt"),
+            published_at_raw=chapter.get("published_at_raw"),
+            source_domain=chapter.get("source_domain"),
+            url=chapter.get("url"),
+            text_content=chapter.get("text_content"),
+            section=chapter.get("section"),
+        )
         chapter_html = f"""
         <article>
           <h1>{chapter_title}</h1>
+          {meta_html}
           {content_html}
         </article>
         """
