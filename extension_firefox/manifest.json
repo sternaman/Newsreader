@@ -3,7 +3,7 @@
   "name": "Newsreader Pipeline",
   "version": "0.1.0",
   "description": "Capture reading lists and articles for the Newsreader host.",
-  "permissions": ["storage", "tabs", "activeTab", "<all_urls>"],
+  "permissions": ["storage", "tabs", "activeTab", "webRequest", "webRequestBlocking", "<all_urls>"],
   "browser_action": {
     "default_popup": "popup.html"
   },

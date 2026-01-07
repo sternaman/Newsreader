@@ -45,6 +45,7 @@ Data persists in a named Docker volume at `/data` inside the container.
    - If the host runs on another machine, set Host URL to `http://<host-ip>:8000`.
 4. Click **Update Book** to send a snapshot list to the host.
    - Optional: enable **Bulk capture snapshot items** to auto-open and ingest each URL.
+   - Firefox-only: enable **Use iPhone-style mobile view for WSJ capture** to force a mobile UA for WSJ list extraction and bulk capture.
 
 ## Capture an Article (Send Article)
 
@@ -53,6 +54,7 @@ Data persists in a named Docker volume at `/data` inside the container.
    - Readability-based extraction is used; if it fails, the full HTML is sent.
    - Images are inlined as data URLs when possible to preserve charts behind logins.
    - Byline, published time, section, and reading time are shown when available.
+   - Firefox-only: the mobile UA toggle captures a mobile-rendered copy of WSJ in a background tab.
 
 ## Build Today's Issue
 

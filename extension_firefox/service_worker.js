@@ -3,6 +3,21 @@ const DEFAULT_THROTTLE_MS = 1500;
 const IMAGE_INLINE_MAX_COUNT = 15;
 const IMAGE_INLINE_MAX_BYTES = 2 * 1024 * 1024;
 const IMAGE_INLINE_TIMEOUT_MS = 15000;
+const MOBILE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1";
+const WSJ_URLS = ["*://*.wsj.com/*"];
+
+const isWsjUrl = (value) => {
+  if (!value) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return url.hostname === "wsj.com" || url.hostname.endsWith(".wsj.com");
+  } catch (error) {
+    return false;
+  }
+};
 
 const buildHeaders = (token) => ({
   "Content-Type": "application/json",
@@ -74,9 +89,69 @@ const inlineImages = async (html, baseUrl) => {
   return doc.body ? doc.body.innerHTML : html;
 };
 
+const withMobileUAForTab = (tabId, enabled) => {
+  if (!enabled || !browser.webRequest || !browser.webRequest.onBeforeSendHeaders) {
+    return () => {};
+  }
+  const listener = (details) => {
+    if (details.tabId !== tabId) {
+      return {};
+    }
+    const headers = details.requestHeaders || [];
+    const existing = headers.find((h) => h.name.toLowerCase() === "user-agent");
+    if (existing) {
+      existing.value = MOBILE_UA;
+    } else {
+      headers.push({ name: "User-Agent", value: MOBILE_UA });
+    }
+    return { requestHeaders: headers };
+  };
+  browser.webRequest.onBeforeSendHeaders.addListener(
+    listener,
+    { urls: WSJ_URLS, types: ["main_frame"], tabId },
+    ["blocking", "requestHeaders"]
+  );
+  return () => {
+    if (browser.webRequest.onBeforeSendHeaders.hasListener(listener)) {
+      browser.webRequest.onBeforeSendHeaders.removeListener(listener);
+    }
+  };
+};
+
+const openCaptureTab = async (url, useMobileUA) => {
+  if (useMobileUA) {
+    const tab = await browser.tabs.create({ url: "about:blank", active: false });
+    const removeListener = withMobileUAForTab(tab.id, true);
+    await browser.tabs.update(tab.id, { url });
+    return { tab, removeListener };
+  }
+  const tab = await browser.tabs.create({ url, active: false });
+  return { tab, removeListener: () => {} };
+};
+
 const extractListFromTab = async (tabId) => {
   const response = await browser.tabs.sendMessage(tabId, { action: "extractList" });
   return response?.items || [];
+};
+
+const extractListForUpdate = async (tab, config) => {
+  if (!config.useMobileUA || !isWsjUrl(tab?.url)) {
+    return extractListFromTab(tab.id);
+  }
+  let tempTab = null;
+  let removeListener = () => {};
+  try {
+    const opened = await openCaptureTab(tab.url, true);
+    tempTab = opened.tab;
+    removeListener = opened.removeListener;
+    await waitForTabLoad(tempTab.id);
+    return await extractListFromTab(tempTab.id);
+  } finally {
+    removeListener();
+    if (tempTab?.id) {
+      await browser.tabs.remove(tempTab.id);
+    }
+  }
 };
 
 const captureArticleFromTab = async (tabId) => {
@@ -108,8 +183,11 @@ const bulkCapture = async (items, config) => {
   const limited = items.slice(0, DEFAULT_MAX_ITEMS);
   for (const item of limited) {
     let tab = null;
+    let removeListener = () => {};
     try {
-      tab = await browser.tabs.create({ url: item.url, active: false });
+      const opened = await openCaptureTab(item.url, config.useMobileUA);
+      tab = opened.tab;
+      removeListener = opened.removeListener;
       await waitForTabLoad(tab.id);
       const article = await captureArticleFromTab(tab.id);
       if (!article || !article.content_html) {
@@ -131,6 +209,7 @@ const bulkCapture = async (items, config) => {
     } catch (error) {
       results.push({ url: item.url, status: "error", error: error.message });
     } finally {
+      removeListener();
       if (tab?.id) {
         await browser.tabs.remove(tab.id);
       }
@@ -154,7 +233,7 @@ browser.runtime.onMessage.addListener(async (message) => {
     }
 
     if (action === "updateBook") {
-      const items = await extractListFromTab(tab.id);
+      const items = await extractListForUpdate(tab, config);
       await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, config.token, {
         items
       });
@@ -181,6 +260,17 @@ browser.runtime.onMessage.addListener(async (message) => {
     }
 
     if (action === "sendArticle") {
+      if (config.useMobileUA) {
+        const results = await bulkCapture(
+          [{ url: tab.url, title: tab.title || tab.url }],
+          config
+        );
+        const first = results[0];
+        if (!first || first.status !== "ok") {
+          return { error: first?.error || "Article extraction failed" };
+        }
+        return { status: "Article sent." };
+      }
       const article = await captureArticleFromTab(tab.id);
       if (!article || !article.content_html) {
         return { error: "Article extraction failed" };
