@@ -13,7 +13,7 @@ from ebooklib import epub
 from dateutil import parser, tz
 
 SCENE_BREAK_MARKER = "* * *"
-MIN_CONTENT_TEXT_LEN = 200
+MIN_CONTENT_TEXT_LEN = 800
 
 ALLOWED_TAGS = bleach.sanitizer.ALLOWED_TAGS.union(
     {
@@ -326,6 +326,8 @@ def build_issue_epub(
 
     for idx, chapter in enumerate(chapters, start=1):
         chapter_title = chapter["title"]
+        if chapter_title.endswith(" - WSJ"):
+            chapter_title = chapter_title[:-6]
         content_html = _normalize_scene_breaks(chapter["content_html"])
         if _html_text_length(content_html) < MIN_CONTENT_TEXT_LEN:
             fallback_html = _text_to_paragraphs(chapter.get("text_content"))

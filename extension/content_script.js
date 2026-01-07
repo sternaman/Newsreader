@@ -126,6 +126,7 @@ const cleanupArticleHtml = (html) => {
     return html;
   }
   const doc = new DOMParser().parseFromString(html, "text/html");
+  const MAX_JUNK_LENGTH = 300;
   const junkPatterns = [
     /skip to main content/i,
     /this copy is for your personal, non-commercial use only/i,
@@ -169,6 +170,9 @@ const cleanupArticleHtml = (html) => {
   doc.querySelectorAll("p, div, span, li").forEach((el) => {
     const text = normalizeText(el.textContent || "");
     if (!text) {
+      return;
+    }
+    if (text.length > MAX_JUNK_LENGTH) {
       return;
     }
     for (const pattern of junkPatterns) {

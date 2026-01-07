@@ -363,6 +363,11 @@ const bulkCapture = async (items, config) => {
       if (!article || !article.content_html) {
         throw new Error("Article extraction failed");
       }
+      await writeLog("info", "Article payload sizes", {
+        url: item.url,
+        htmlLength: article.content_html.length,
+        textLength: (article.text_content || "").length
+      });
       const contentHtml = await inlineImages(article.content_html, item.url);
       await postJson(`${host}/api/books/${bookId}/articles/ingest`, {
         url: item.url,
@@ -464,6 +469,11 @@ const handleAction = async (action, config, shouldBulk) => {
       if (!article || !article.content_html) {
         return { error: "Article extraction failed" };
       }
+      await writeLog("info", "Article payload sizes", {
+        url: tab.url,
+        htmlLength: article.content_html.length,
+        textLength: (article.text_content || "").length
+      });
       const contentHtml = await inlineImages(article.content_html, tab.url);
       await postJson(`${config.host}/api/books/${config.bookId}/articles/ingest`, {
         url: tab.url,
