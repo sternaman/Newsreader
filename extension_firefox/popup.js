@@ -144,6 +144,33 @@ const sendAction = async (action) => {
     setStatus("Set a Book ID first.");
     return;
   }
+  if (action === "buildIssue") {
+    try {
+      const status = await fallbackBuildIssue(config);
+      setStatus(status);
+    } catch (error) {
+      setStatus(error.message || String(error));
+    }
+    return;
+  }
+  if (action === "updateBook" && !bulkCheckbox.checked && !config.useMobileUA) {
+    try {
+      const status = await fallbackUpdateBook(config);
+      setStatus(status);
+    } catch (error) {
+      setStatus(error.message || String(error));
+    }
+    return;
+  }
+  if (action === "sendArticle" && !config.useMobileUA) {
+    try {
+      const status = await fallbackSendArticle(config);
+      setStatus(status);
+    } catch (error) {
+      setStatus(error.message || String(error));
+    }
+    return;
+  }
   try {
     const response = await browser.runtime.sendMessage({
       action,
