@@ -173,11 +173,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, config.token, {
           items
         });
-        if (shouldBulk) {
-          const results = await bulkCapture(items, config);
-          sendResponse({ status: `Snapshot saved. Bulk captured ${results.length} items.` });
+      if (shouldBulk) {
+        const results = await bulkCapture(items, config);
+        const okCount = results.filter((result) => result.status === "ok").length;
+        if (okCount > 0) {
+          try {
+            await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, config.token, {});
+            sendResponse({
+              status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue built.`
+            });
+          } catch (error) {
+            sendResponse({
+              status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue build failed: ${error.message}`
+            });
+          }
           return;
         }
+        sendResponse({
+          status: `Snapshot saved. Bulk captured ${results.length} items (0 ok). Issue not built.`
+        });
+        return;
+      }
         sendResponse({ status: `Snapshot saved (${items.length} items).` });
         return;
       }

@@ -160,7 +160,22 @@ browser.runtime.onMessage.addListener(async (message) => {
       });
       if (shouldBulk) {
         const results = await bulkCapture(items, config);
-        return { status: `Snapshot saved. Bulk captured ${results.length} items.` };
+        const okCount = results.filter((result) => result.status === "ok").length;
+        if (okCount > 0) {
+          try {
+            await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, config.token, {});
+            return {
+              status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue built.`
+            };
+          } catch (error) {
+            return {
+              status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue build failed: ${error.message}`
+            };
+          }
+        }
+        return {
+          status: `Snapshot saved. Bulk captured ${results.length} items (0 ok). Issue not built.`
+        };
       }
       return { status: `Snapshot saved (${items.length} items).` };
     }
