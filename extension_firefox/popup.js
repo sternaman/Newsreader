@@ -220,17 +220,34 @@ const sendAction = async (action) => {
     setStatus(status);
   } catch (error) {
     const message = error?.message || String(error);
-    if (action === "buildIssue") {
+    const backgroundMissing =
+      /Receiving end does not exist/i.test(message) ||
+      /Could not establish connection/i.test(message);
+    if (backgroundMissing) {
       try {
-        const status = await fallbackBuildIssue(config);
-        setStatus(status);
-        return;
+        if (action === "updateBook") {
+          let status = await fallbackUpdateBook(config);
+          if (bulkCheckbox.checked) {
+            status = `${status} Bulk capture skipped (background not ready).`;
+          }
+          if (config.useMobileUA) {
+            status = `${status} Mobile UA capture skipped (background not ready).`;
+          }
+          setStatus(status);
+          return;
+        }
+        if (action === "sendArticle") {
+          let status = await fallbackSendArticle(config);
+          if (config.useMobileUA) {
+            status = `${status} Mobile UA capture skipped (background not ready).`;
+          }
+          setStatus(status);
+          return;
+        }
       } catch (fallbackError) {
         setStatus(fallbackError.message || String(fallbackError));
         return;
       }
-    }
-    if (/Receiving end does not exist/i.test(message)) {
       setStatus("Background not ready. Reload the add-on and try again.");
       return;
     }
