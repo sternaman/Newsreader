@@ -209,6 +209,13 @@ def _render_metadata(
     text_content: Optional[str],
     section: Optional[str],
 ) -> str:
+    if excerpt:
+        trimmed_excerpt = excerpt.strip()
+        if trimmed_excerpt.startswith("{") or trimmed_excerpt.startswith("[") or "schema.org" in trimmed_excerpt:
+            excerpt = None
+        elif len(trimmed_excerpt) > 400:
+            excerpt = trimmed_excerpt[:397] + "..."
+
     meta_primary: List[str] = []
     meta_secondary: List[str] = []
 

@@ -121,6 +121,59 @@ const extractPublishedAtRaw = () =>
     "meta[name='sailthru.date']"
   ]);
 
+const cleanupArticleHtml = (html) => {
+  if (typeof DOMParser === "undefined") {
+    return html;
+  }
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const selectors = [
+    "header",
+    "nav",
+    "footer",
+    "aside",
+    "script",
+    "style",
+    "noscript",
+    "svg",
+    "form",
+    "[aria-label*='Advertisement']",
+    "[aria-label*='ad']",
+    "[class*='ad-']",
+    "[class*='advert']",
+    "[class*='promo']",
+    "[class*='subscribe']",
+    "[class*='newsletter']",
+    "[class*='related']",
+    "[class*='recommend']",
+    "[class*='share']",
+    "[class*='social']",
+    "[class*='comment']",
+    "[id*='ad']",
+    "[id*='promo']",
+    "[id*='footer']",
+    "[id*='header']",
+    "[id*='nav']"
+  ];
+  doc.querySelectorAll(selectors.join(",")).forEach((el) => el.remove());
+  doc.querySelectorAll("h1").forEach((el) => el.remove());
+  doc.querySelectorAll("a").forEach((link) => {
+    const text = normalizeText(link.textContent || "");
+    if (text.toLowerCase().startsWith("skip to")) {
+      link.remove();
+    }
+  });
+  return doc.body ? doc.body.innerHTML : html;
+};
+
+const fallbackContentHtml = () => {
+  const node =
+    document.querySelector("article") ||
+    document.querySelector("main") ||
+    document.body ||
+    document.documentElement;
+  return node ? node.innerHTML : document.documentElement.outerHTML;
+};
+
 const extractArticle = () => {
   const section = extractSection();
   const publishedAtRaw = extractPublishedAtRaw();
@@ -130,11 +183,12 @@ const extractArticle = () => {
     const article = reader.parse();
     if (article && article.content) {
       const textContent = article.textContent || document.body?.innerText || null;
+      const cleanedHtml = cleanupArticleHtml(article.content);
       return {
         title: article.title || document.title,
         byline: article.byline,
         excerpt: article.excerpt,
-        content_html: article.content,
+        content_html: cleanedHtml,
         text_content: textContent,
         section,
         published_at_raw: publishedAtRaw
@@ -143,11 +197,12 @@ const extractArticle = () => {
   } catch (error) {
     console.warn("Readability failed", error);
   }
+  const fallbackHtml = cleanupArticleHtml(fallbackContentHtml());
   return {
     title: document.title,
     byline: null,
     excerpt: null,
-    content_html: document.documentElement.outerHTML,
+    content_html: fallbackHtml,
     text_content: document.body?.innerText || null,
     section,
     published_at_raw: publishedAtRaw
