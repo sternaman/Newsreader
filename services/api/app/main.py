@@ -188,6 +188,30 @@ async def build_issue_ui(book_id: int):
     return RedirectResponse(f"/books/{book_id}", status_code=303)
 
 
+@app.post("/books/{book_id}/articles/clear")
+async def clear_articles_ui(book_id: int):
+    _book_or_404(book_id)
+    with get_conn() as conn:
+        issues = conn.execute(
+            "SELECT id, epub_path FROM issues WHERE book_id = ?",
+            (book_id,),
+        ).fetchall()
+        conn.execute(
+            "DELETE FROM issue_articles WHERE issue_id IN (SELECT id FROM issues WHERE book_id = ?)",
+            (book_id,),
+        )
+        conn.execute("DELETE FROM issues WHERE book_id = ?", (book_id,))
+        conn.execute("DELETE FROM articles WHERE book_id = ?", (book_id,))
+    for issue in issues:
+        epub_path = issue["epub_path"]
+        if epub_path and os.path.exists(epub_path):
+            try:
+                os.remove(epub_path)
+            except OSError:
+                pass
+    return RedirectResponse(f"/books/{book_id}", status_code=303)
+
+
 @app.get("/issues", response_class=HTMLResponse)
 async def issues_list(request: Request):
     with get_conn() as conn:
