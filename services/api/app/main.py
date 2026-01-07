@@ -1,9 +1,8 @@
 import os
 from datetime import datetime, date
-from typing import List, Optional
 
 from dateutil import tz
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -15,7 +14,6 @@ from renderer.renderer import compute_content_hash, embed_images
 app = FastAPI()
 
 TEMPLATES = Jinja2Templates(directory="/app/app/templates")
-API_TOKEN = os.environ.get("API_TOKEN", "changeme")
 EPUB_DIR = "/data/epubs"
 
 app.mount("/static", StaticFiles(directory="/app/app/static"), name="static")
@@ -28,11 +26,6 @@ def _now_local() -> datetime:
 
 def _issue_date() -> str:
     return _now_local().date().isoformat()
-
-
-def _require_token(x_api_token: Optional[str] = Header(None)) -> None:
-    if not x_api_token or x_api_token != API_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid API token")
 
 
 def _book_or_404(book_id: int):
@@ -221,7 +214,7 @@ async def issues_list(request: Request):
     return TEMPLATES.TemplateResponse("issues.html", {"request": request, "issues": issues})
 
 
-@app.post("/api/books", dependencies=[Depends(_require_token)])
+@app.post("/api/books")
 async def create_book(payload: dict):
     name = payload.get("name")
     source_url = payload.get("source_url")
@@ -237,14 +230,14 @@ async def create_book(payload: dict):
     return {"id": book_id, "name": name, "source_url": source_url}
 
 
-@app.get("/api/books", dependencies=[Depends(_require_token)])
+@app.get("/api/books")
 async def list_books():
     with get_conn() as conn:
         books = conn.execute("SELECT * FROM books ORDER BY created_at DESC").fetchall()
     return {"books": [dict(row) for row in books]}
 
 
-@app.post("/api/books/{book_id}/snapshot", dependencies=[Depends(_require_token)])
+@app.post("/api/books/{book_id}/snapshot")
 async def snapshot(book_id: int, payload: dict):
     _book_or_404(book_id)
     items = payload.get("items")
@@ -261,7 +254,7 @@ async def snapshot(book_id: int, payload: dict):
     return {"status": "ok", "count": len(items)}
 
 
-@app.get("/api/books/{book_id}/items", dependencies=[Depends(_require_token)])
+@app.get("/api/books/{book_id}/items")
 async def list_items(book_id: int):
     _book_or_404(book_id)
     with get_conn() as conn:
@@ -272,7 +265,7 @@ async def list_items(book_id: int):
     return {"items": [dict(row) for row in items]}
 
 
-@app.post("/api/books/{book_id}/articles/ingest", dependencies=[Depends(_require_token)])
+@app.post("/api/books/{book_id}/articles/ingest")
 async def ingest_article(book_id: int, payload: dict):
     _book_or_404(book_id)
     url = payload.get("url")
@@ -310,13 +303,13 @@ async def ingest_article(book_id: int, payload: dict):
     return {"status": "ok", "article_id": article_id}
 
 
-@app.post("/api/books/{book_id}/issue/build", dependencies=[Depends(_require_token)])
+@app.post("/api/books/{book_id}/issue/build")
 async def build_issue_api(book_id: int):
     issue = _build_issue(book_id)
     return {"issue_id": issue["id"], "title": issue["title"], "issue_date": issue["issue_date"]}
 
 
-@app.get("/api/books/{book_id}/issue/current", dependencies=[Depends(_require_token)])
+@app.get("/api/books/{book_id}/issue/current")
 async def current_issue_api(book_id: int):
     issue = _current_issue(book_id)
     return {"issue_id": issue["id"], "title": issue["title"], "issue_date": issue["issue_date"]}
@@ -331,7 +324,7 @@ async def download_issue(issue_id: int):
     return FileResponse(issue["epub_path"], media_type="application/epub+zip", filename=os.path.basename(issue["epub_path"]))
 
 
-@app.get("/api/issues", dependencies=[Depends(_require_token)])
+@app.get("/api/issues")
 async def list_issues():
     with get_conn() as conn:
         issues = conn.execute(

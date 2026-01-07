@@ -8,7 +8,6 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - API_TOKEN=${API_TOKEN:-changeme}
       - TZ=${TZ:-UTC}
       - READING_WPM=${READING_WPM:-230}
     volumes:

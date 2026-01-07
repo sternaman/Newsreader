@@ -1,6 +1,5 @@
 const statusEl = document.getElementById("status");
 const hostInput = document.getElementById("host");
-const tokenInput = document.getElementById("token");
 const bookInput = document.getElementById("bookId");
 const bulkCheckbox = document.getElementById("bulkCapture");
 
@@ -20,9 +19,8 @@ const normalizeHost = (value) => {
 };
 
 const loadConfig = async () => {
-  const config = await chrome.storage.sync.get(["host", "token", "bookId", "bulkCapture"]);
+  const config = await chrome.storage.sync.get(["host", "bookId", "bulkCapture"]);
   hostInput.value = config.host || "http://localhost:8000";
-  tokenInput.value = config.token || "changeme";
   bookInput.value = config.bookId || "";
   bulkCheckbox.checked = Boolean(config.bulkCapture);
 };
@@ -30,7 +28,6 @@ const loadConfig = async () => {
 const saveConfig = async () => {
   await chrome.storage.sync.set({
     host: normalizeHost(hostInput.value),
-    token: tokenInput.value.trim(),
     bookId: bookInput.value.trim(),
     bulkCapture: bulkCheckbox.checked
   });
@@ -38,10 +35,9 @@ const saveConfig = async () => {
 };
 
 const sendAction = async (action) => {
-  const stored = await chrome.storage.sync.get(["host", "token", "bookId"]);
+  const stored = await chrome.storage.sync.get(["host", "bookId"]);
   const config = {
     host: normalizeHost(hostInput.value) || stored.host || "http://localhost:8000",
-    token: tokenInput.value.trim() || stored.token || "changeme",
     bookId: bookInput.value.trim() || stored.bookId || "",
     bulkCapture: bulkCheckbox.checked
   };

@@ -19,15 +19,14 @@ const isWsjUrl = (value) => {
   }
 };
 
-const buildHeaders = (token) => ({
-  "Content-Type": "application/json",
-  "X-API-Token": token
+const buildHeaders = () => ({
+  "Content-Type": "application/json"
 });
 
-const postJson = async (url, token, payload) => {
+const postJson = async (url, payload) => {
   const response = await fetch(url, {
     method: "POST",
-    headers: buildHeaders(token),
+    headers: buildHeaders(),
     body: JSON.stringify(payload)
   });
   if (!response.ok) {
@@ -178,7 +177,7 @@ const waitForTabLoad = (tabId) => {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const bulkCapture = async (items, config) => {
-  const { host, token, bookId } = config;
+  const { host, bookId } = config;
   const results = [];
   const limited = items.slice(0, DEFAULT_MAX_ITEMS);
   for (const item of limited) {
@@ -194,7 +193,7 @@ const bulkCapture = async (items, config) => {
         throw new Error("Article extraction failed");
       }
       const contentHtml = await inlineImages(article.content_html, item.url);
-      await postJson(`${host}/api/books/${bookId}/articles/ingest`, token, {
+      await postJson(`${host}/api/books/${bookId}/articles/ingest`, {
         url: item.url,
         title: article.title || item.title,
         byline: article.byline,
@@ -234,7 +233,7 @@ browser.runtime.onMessage.addListener(async (message) => {
 
     if (action === "updateBook") {
       const items = await extractListForUpdate(tab, config);
-      await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, config.token, {
+      await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, {
         items
       });
       if (shouldBulk) {
@@ -242,7 +241,7 @@ browser.runtime.onMessage.addListener(async (message) => {
         const okCount = results.filter((result) => result.status === "ok").length;
         if (okCount > 0) {
           try {
-            await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, config.token, {});
+            await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
             return {
               status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue built.`
             };
@@ -276,7 +275,7 @@ browser.runtime.onMessage.addListener(async (message) => {
         return { error: "Article extraction failed" };
       }
       const contentHtml = await inlineImages(article.content_html, tab.url);
-      await postJson(`${config.host}/api/books/${config.bookId}/articles/ingest`, config.token, {
+      await postJson(`${config.host}/api/books/${config.bookId}/articles/ingest`, {
         url: tab.url,
         title: article.title,
         byline: article.byline,
@@ -291,7 +290,7 @@ browser.runtime.onMessage.addListener(async (message) => {
     }
 
     if (action === "buildIssue") {
-      await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, config.token, {});
+      await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
       return { status: "Issue build triggered." };
     }
 

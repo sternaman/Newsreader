@@ -1,6 +1,5 @@
 const statusEl = document.getElementById("status");
 const hostInput = document.getElementById("host");
-const tokenInput = document.getElementById("token");
 const bookInput = document.getElementById("bookId");
 const bulkCheckbox = document.getElementById("bulkCapture");
 const mobileCheckbox = document.getElementById("useMobileUA");
@@ -22,9 +21,9 @@ const normalizeHost = (value) => {
 
 const readConfig = async () => {
   try {
-    return await browser.storage.sync.get(["host", "token", "bookId", "bulkCapture", "useMobileUA"]);
+    return await browser.storage.sync.get(["host", "bookId", "bulkCapture", "useMobileUA"]);
   } catch (error) {
-    return await browser.storage.local.get(["host", "token", "bookId", "bulkCapture", "useMobileUA"]);
+    return await browser.storage.local.get(["host", "bookId", "bulkCapture", "useMobileUA"]);
   }
 };
 
@@ -40,7 +39,6 @@ const loadConfig = async () => {
   try {
     const config = await readConfig();
     hostInput.value = config.host || "http://localhost:8000";
-    tokenInput.value = config.token || "changeme";
     bookInput.value = config.bookId || "";
     bulkCheckbox.checked = Boolean(config.bulkCapture);
     mobileCheckbox.checked = Boolean(config.useMobileUA);
@@ -53,7 +51,6 @@ const saveConfig = async () => {
   try {
     await writeConfig({
       host: normalizeHost(hostInput.value),
-      token: tokenInput.value.trim(),
       bookId: bookInput.value.trim(),
       bulkCapture: bulkCheckbox.checked,
       useMobileUA: mobileCheckbox.checked
@@ -70,7 +67,6 @@ const sendAction = async (action) => {
     const stored = await readConfig();
     config = {
       host: normalizeHost(hostInput.value) || stored.host || "http://localhost:8000",
-      token: tokenInput.value.trim() || stored.token || "changeme",
       bookId: bookInput.value.trim() || stored.bookId || "",
       bulkCapture: bulkCheckbox.checked,
       useMobileUA: mobileCheckbox.checked

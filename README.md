@@ -9,10 +9,9 @@ Local-first, personal-only reading pipeline that captures article lists and cont
 
 ## Setup (OrbStack)
 
-1. From the repo root, create an API token and start the stack:
+1. From the repo root, start the stack:
 
    ```bash
-   export API_TOKEN=changeme
    docker-compose up --build
    ```
 
@@ -41,7 +40,7 @@ Data persists in a named Docker volume at `/data` inside the container.
 
 1. Navigate to a page that contains links you want captured.
 2. Open the extension popup.
-3. Enter Host URL (default `http://localhost:8000`), API Token, and Book ID.
+3. Enter Host URL (default `http://localhost:8000`) and Book ID.
    - If the host runs on another machine, set Host URL to `http://<host-ip>:8000`.
 4. Click **Update Book** to send a snapshot list to the host.
    - Optional: enable **Bulk capture snapshot items** to auto-open and ingest each URL.
@@ -71,7 +70,7 @@ The issue EPUB is generated per Book per calendar day and updated with new chapt
 ## API Quick Checks
 
 ```bash
-curl -H "X-API-Token: changeme" http://localhost:8000/api/books
+curl http://localhost:8000/api/books
 ```
 
 ## Reading Time + Scene Breaks
