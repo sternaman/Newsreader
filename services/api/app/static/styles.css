@@ -75,3 +75,47 @@ button {
   font-size: 0.9rem;
   margin-left: 0.5rem;
 }
+
+.status {
+  margin-top: 0.6rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #e6e6e6;
+  color: #444;
+  font-size: 0.8rem;
+  margin-left: 0.4rem;
+}
+
+.badge.building {
+  background: #ffe6a7;
+  color: #6b4e00;
+}
+
+.badge.complete {
+  background: #d7f5d7;
+  color: #1f5f1f;
+}
+
+.badge.failed {
+  background: #ffd6d6;
+  color: #7a1f1f;
+}
+
+.badge.new {
+  background: #e5e5ff;
+  color: #333;
+}
+
+.badge.unknown {
+  background: #eee;
+  color: #555;
+}
+
+.error {
+  color: #a00;
+  font-weight: 600;
+}

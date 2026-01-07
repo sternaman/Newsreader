@@ -11,6 +11,32 @@
   </form>
   {% if issue %}
     <p>Latest issue: {{ issue.title }} - <a href="/download/{{ issue.id }}.epub">Download EPUB</a></p>
+    <div class="status">
+      <p>
+        Build status:
+        <span class="badge {{ issue.build_status or 'unknown' }}">{{ issue.build_status or "unknown" }}</span>
+        {% if issue.build_started_at %}<span class="muted">Started {{ issue.build_started_at }}</span>{% endif %}
+        {% if issue.build_finished_at %}<span class="muted">Finished {{ issue.build_finished_at }}</span>{% endif %}
+      </p>
+      {% if issue.build_status == "building" %}
+        <p class="muted">Build in progress. This page will refresh automatically.</p>
+        <script>
+          setTimeout(() => location.reload(), 5000);
+        </script>
+      {% endif %}
+      {% if issue.build_status == "failed" and issue.build_error %}
+        <p class="error">Build failed: {{ issue.build_error }}</p>
+      {% endif %}
+      {% if issue.audit_summary %}
+        <p>
+          Audit: {{ issue.audit_summary.total_articles }} articles,
+          {{ issue.audit_summary.flagged_articles }} flagged,
+          {{ issue.audit_summary.healed_articles }} healed,
+          {{ issue.audit_summary.fallback_used }} fallback.
+        </p>
+        <p><a href="/issues/{{ issue.id }}/audit">Download audit JSON</a></p>
+      {% endif %}
+    </div>
   {% endif %}
 </section>
 

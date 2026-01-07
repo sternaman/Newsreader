@@ -49,6 +49,12 @@ def init_db() -> None:
                 epub_path TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                build_status TEXT,
+                build_started_at TEXT,
+                build_finished_at TEXT,
+                build_error TEXT,
+                audit_path TEXT,
+                audit_summary TEXT,
                 FOREIGN KEY(book_id) REFERENCES books(id)
             );
 
@@ -62,6 +68,7 @@ def init_db() -> None:
             """
         )
         _ensure_article_columns(conn)
+        _ensure_issue_columns(conn)
 
 
 def _ensure_article_columns(conn: sqlite3.Connection) -> None:
@@ -70,6 +77,22 @@ def _ensure_article_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE articles ADD COLUMN text_content TEXT")
     if "section" not in existing:
         conn.execute("ALTER TABLE articles ADD COLUMN section TEXT")
+
+
+def _ensure_issue_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(issues)").fetchall()}
+    if "build_status" not in existing:
+        conn.execute("ALTER TABLE issues ADD COLUMN build_status TEXT")
+    if "build_started_at" not in existing:
+        conn.execute("ALTER TABLE issues ADD COLUMN build_started_at TEXT")
+    if "build_finished_at" not in existing:
+        conn.execute("ALTER TABLE issues ADD COLUMN build_finished_at TEXT")
+    if "build_error" not in existing:
+        conn.execute("ALTER TABLE issues ADD COLUMN build_error TEXT")
+    if "audit_path" not in existing:
+        conn.execute("ALTER TABLE issues ADD COLUMN audit_path TEXT")
+    if "audit_summary" not in existing:
+        conn.execute("ALTER TABLE issues ADD COLUMN audit_summary TEXT")
 
 
 @contextmanager
