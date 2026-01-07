@@ -210,14 +210,20 @@ const sendMessageWithRetry = async (tabId, message) => {
   throw lastError || new Error("Content script not reachable");
 };
 
-const extractListFromTab = async (tabId) => {
-  const response = await sendMessageWithRetry(tabId, { action: "extractList" });
+const extractListFromTab = async (tabId, options = {}) => {
+  const action = options.waitFor ? "extractListWait" : "extractList";
+  const response = await sendMessageWithRetry(tabId, { action, options });
   return response?.items || [];
 };
 
 const extractListForUpdate = async (tab, config) => {
+  const waitOptions = {
+    waitFor: Boolean(config.useMobileUA),
+    timeoutMs: 10000,
+    intervalMs: 400
+  };
   if (!config.useMobileUA || !isWsjUrl(tab?.url)) {
-    return extractListFromTab(tab.id);
+    return extractListFromTab(tab.id, waitOptions);
   }
   let tempTab = null;
   let removeListener = () => {};
@@ -226,7 +232,7 @@ const extractListForUpdate = async (tab, config) => {
     tempTab = opened.tab;
     removeListener = opened.removeListener;
     await waitForTabLoad(tempTab.id);
-    return await extractListFromTab(tempTab.id);
+    return await extractListFromTab(tempTab.id, waitOptions);
   } finally {
     removeListener();
     if (tempTab?.id) {
@@ -322,7 +328,13 @@ const handleAction = async (action, config, shouldBulk) => {
     }
 
     if (action === "updateBook") {
+      await writeLog("info", "Extracting list from tab", {
+        tabId: tab.id,
+        url: tab.url,
+        useMobileUA: Boolean(config.useMobileUA)
+      });
       const items = await extractListForUpdate(tab, config);
+      await writeLog("info", "List extracted", { count: items.length, url: tab.url });
       await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, {
         items
       });

@@ -1,4 +1,5 @@
 const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const logEvent = (level, message, data) => {
   try {
@@ -77,11 +78,14 @@ const extractWsjFrontPageItems = () => {
   return items;
 };
 
-const extractListItems = () => {
+const extractListItems = (options = {}) => {
+  const { log = true } = options;
   if (isWsjHost(window.location.hostname)) {
     const wsjItems = extractWsjFrontPageItems();
     if (wsjItems.length > 0) {
-      logEvent("info", "WSJ list extracted", { count: wsjItems.length });
+      if (log) {
+        logEvent("info", "WSJ list extracted", { count: wsjItems.length });
+      }
       return wsjItems;
     }
   }
@@ -93,7 +97,32 @@ const extractListItems = () => {
       title: normalizeText(link.textContent),
       url: link.href
     }));
-  logEvent("info", "Generic list extracted", { count: items.length });
+  if (log) {
+    logEvent("info", "Generic list extracted", { count: items.length });
+  }
+  return items;
+};
+
+const extractListWithWait = async (options = {}) => {
+  const timeoutMs = options.timeoutMs || 8000;
+  const intervalMs = options.intervalMs || 400;
+  const start = Date.now();
+  let items = extractListItems({ log: false });
+  if (items.length > 0) {
+    logEvent("info", "List extracted after wait", { count: items.length, waitedMs: 0 });
+    return items;
+  }
+  while (Date.now() - start < timeoutMs) {
+    await sleep(intervalMs);
+    items = extractListItems({ log: false });
+    if (items.length > 0) {
+      break;
+    }
+  }
+  logEvent("info", "List extracted after wait", {
+    count: items.length,
+    waitedMs: Date.now() - start
+  });
   return items;
 };
 
@@ -250,7 +279,24 @@ const extractArticle = () => {
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "extractList") {
+    logEvent("info", "Extract list requested", {
+      url: window.location.href,
+      readyState: document.readyState,
+      linkCount: document.querySelectorAll("a[href]").length
+    });
     sendResponse({ items: extractListItems() });
+    return;
+  }
+  if (message.action === "extractListWait") {
+    logEvent("info", "Extract list (wait) requested", {
+      url: window.location.href,
+      readyState: document.readyState,
+      linkCount: document.querySelectorAll("a[href]").length
+    });
+    extractListWithWait(message.options || {})
+      .then((items) => sendResponse({ items }))
+      .catch((error) => sendResponse({ error: error.message || String(error) }));
+    return true;
   }
   if (message.action === "captureArticle") {
     sendResponse({ article: extractArticle() });
