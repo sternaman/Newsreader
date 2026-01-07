@@ -8,6 +8,70 @@ const setStatus = (msg) => {
   statusEl.textContent = msg;
 };
 
+const postJson = async (url, payload) => {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`${response.status} ${text}`);
+  }
+  return response.json();
+};
+
+const getActiveTab = async () => {
+  const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] || null;
+};
+
+const fallbackUpdateBook = async (config) => {
+  const tab = await getActiveTab();
+  if (!tab) {
+    throw new Error("No active tab");
+  }
+  const response = await browser.tabs.sendMessage(tab.id, { action: "extractList" });
+  const items = response?.items || [];
+  await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, { items });
+  return `Snapshot saved (${items.length} items).`;
+};
+
+const fallbackSendArticle = async (config) => {
+  const tab = await getActiveTab();
+  if (!tab) {
+    throw new Error("No active tab");
+  }
+  const response = await browser.tabs.sendMessage(tab.id, { action: "captureArticle" });
+  const article = response?.article;
+  if (!article || !article.content_html) {
+    throw new Error("Article extraction failed");
+  }
+  let sourceDomain = null;
+  try {
+    sourceDomain = new URL(tab.url).hostname;
+  } catch (error) {
+    sourceDomain = null;
+  }
+  await postJson(`${config.host}/api/books/${config.bookId}/articles/ingest`, {
+    url: tab.url,
+    title: article.title || tab.title || tab.url,
+    byline: article.byline,
+    excerpt: article.excerpt,
+    content_html: article.content_html,
+    source_domain: sourceDomain,
+    published_at_raw: article.published_at_raw || null,
+    text_content: article.text_content || null,
+    section: article.section || null
+  });
+  return "Article sent.";
+};
+
+const fallbackBuildIssue = async (config) => {
+  await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
+  return "Issue build triggered.";
+};
+
 const normalizeHost = (value) => {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -92,7 +156,33 @@ const sendAction = async (action) => {
       setStatus(response?.status || "Done.");
     }
   } catch (error) {
-    setStatus(error.message || String(error));
+    const message = error?.message || String(error);
+    if (/Receiving end does not exist/i.test(message)) {
+      try {
+        let status;
+        if (action === "buildIssue") {
+          status = await fallbackBuildIssue(config);
+        } else if (action === "updateBook") {
+          status = await fallbackUpdateBook(config);
+          if (bulkCheckbox.checked) {
+            status = `${status} Bulk capture requires the background script. Reload the add-on.`;
+          }
+        } else if (action === "sendArticle") {
+          if (config.useMobileUA) {
+            throw new Error("Mobile capture needs the background script. Reload the add-on or disable the mobile toggle.");
+          }
+          status = await fallbackSendArticle(config);
+        } else {
+          throw new Error(message);
+        }
+        setStatus(status);
+        return;
+      } catch (fallbackError) {
+        setStatus(fallbackError.message || String(fallbackError));
+        return;
+      }
+    }
+    setStatus(message);
   }
 };
 
