@@ -11,6 +11,8 @@ const LOG_MAX = 200;
 const PANEL_URL = browser.runtime.getURL("panel.html");
 const PANEL_WIDTH = 460;
 const PANEL_HEIGHT = 720;
+const RETRY_DELAY_MS = 400;
+const RETRY_ATTEMPTS = 5;
 
 const appendLog = async (entry) => {
   const stored = await browser.storage.local.get(LOG_KEY);
@@ -23,6 +25,27 @@ const appendLog = async (entry) => {
 const writeLog = async (level, message, data) => {
   const entry = { ts: new Date().toISOString(), level, message, data };
   await appendLog(entry);
+};
+
+const shouldRetryError = (error) => {
+  const message = error?.message || String(error);
+  return /Receiving end does not exist|Could not establish connection/i.test(message);
+};
+
+const ensureContentScripts = async (tabId) => {
+  if (!browser.tabs?.executeScript) {
+    return;
+  }
+  try {
+    await browser.tabs.executeScript(tabId, { file: "readability.js" });
+  } catch (error) {
+    // Ignore duplicate injections or restricted pages.
+  }
+  try {
+    await browser.tabs.executeScript(tabId, { file: "content_script.js" });
+  } catch (error) {
+    // Ignore duplicate injections or restricted pages.
+  }
 };
 
 const focusOrOpenPanel = async () => {
@@ -167,8 +190,28 @@ const openCaptureTab = async (url, useMobileUA) => {
   return { tab, removeListener: () => {} };
 };
 
+const sendMessageWithRetry = async (tabId, message) => {
+  let lastError = null;
+  for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await browser.tabs.sendMessage(tabId, message);
+    } catch (error) {
+      lastError = error;
+      if (!shouldRetryError(error)) {
+        throw error;
+      }
+      if (attempt === 0) {
+        await writeLog("warn", "Content script missing, attempting inject", { tabId });
+        await ensureContentScripts(tabId);
+      }
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
+  throw lastError || new Error("Content script not reachable");
+};
+
 const extractListFromTab = async (tabId) => {
-  const response = await browser.tabs.sendMessage(tabId, { action: "extractList" });
+  const response = await sendMessageWithRetry(tabId, { action: "extractList" });
   return response?.items || [];
 };
 
@@ -193,7 +236,7 @@ const extractListForUpdate = async (tab, config) => {
 };
 
 const captureArticleFromTab = async (tabId) => {
-  const response = await browser.tabs.sendMessage(tabId, { action: "captureArticle" });
+  const response = await sendMessageWithRetry(tabId, { action: "captureArticle" });
   return response?.article;
 };
 
