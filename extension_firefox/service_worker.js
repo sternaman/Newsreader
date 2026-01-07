@@ -13,6 +13,8 @@ const PANEL_WIDTH = 460;
 const PANEL_HEIGHT = 720;
 const RETRY_DELAY_MS = 400;
 const RETRY_ATTEMPTS = 5;
+let lastContentTabId = null;
+let lastContentTabUrl = null;
 
 const appendLog = async (entry) => {
   const stored = await browser.storage.local.get(LOG_KEY);
@@ -25,6 +27,51 @@ const appendLog = async (entry) => {
 const writeLog = async (level, message, data) => {
   const entry = { ts: new Date().toISOString(), level, message, data };
   await appendLog(entry);
+};
+
+const isUserContentUrl = (value) => {
+  if (!value) {
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch (error) {
+    return false;
+  }
+};
+
+const recordContentTab = (tab) => {
+  if (!tab || !isUserContentUrl(tab.url)) {
+    return;
+  }
+  lastContentTabId = tab.id;
+  lastContentTabUrl = tab.url;
+};
+
+const getPreferredContentTab = async () => {
+  const activeTabs = await browser.tabs.query({ active: true, currentWindow: true });
+  const active = activeTabs[0] || null;
+  if (active && isUserContentUrl(active.url)) {
+    return active;
+  }
+  if (lastContentTabId) {
+    try {
+      const lastTab = await browser.tabs.get(lastContentTabId);
+      if (isUserContentUrl(lastTab.url)) {
+        return lastTab;
+      }
+    } catch (error) {
+      // Ignore missing tab.
+    }
+  }
+  const allTabs = await browser.tabs.query({ currentWindow: true });
+  const candidates = allTabs.filter((tab) => isUserContentUrl(tab.url));
+  if (!candidates.length) {
+    return null;
+  }
+  candidates.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+  return candidates[0];
 };
 
 const shouldRetryError = (error) => {
@@ -68,6 +115,19 @@ const focusOrOpenPanel = async () => {
     height: PANEL_HEIGHT
   });
 };
+
+browser.tabs.onActivated.addListener((info) => {
+  browser.tabs
+    .get(info.tabId)
+    .then((tab) => recordContentTab(tab))
+    .catch(() => {});
+});
+
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete") {
+    recordContentTab(tab);
+  }
+});
 
 const isWsjUrl = (value) => {
   if (!value) {
@@ -321,11 +381,11 @@ const handleAction = async (action, config, shouldBulk) => {
       bulkCapture: Boolean(shouldBulk),
       useMobileUA: Boolean(config.useMobileUA)
     });
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    const tab = tabs[0];
+    const tab = await getPreferredContentTab();
     if (!tab) {
-      return { error: "No active tab" };
+      return { error: "No active content tab. Open a site page and try again." };
     }
+    await writeLog("info", "Using content tab", { tabId: tab.id, url: tab.url });
 
     if (action === "updateBook") {
       await writeLog("info", "Extracting list from tab", {
