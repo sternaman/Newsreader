@@ -21,6 +21,18 @@ const postJson = async (url, payload) => {
   return response.json();
 };
 
+const sendBeaconJson = (url, payload) => {
+  if (typeof navigator === "undefined" || typeof navigator.sendBeacon !== "function") {
+    return false;
+  }
+  try {
+    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    return navigator.sendBeacon(url, blob);
+  } catch (error) {
+    return false;
+  }
+};
+
 const getActiveTab = async () => {
   const tabs = await browser.tabs.query({ active: true, currentWindow: true });
   return tabs[0] || null;
@@ -68,7 +80,11 @@ const fallbackSendArticle = async (config) => {
 };
 
 const fallbackBuildIssue = async (config) => {
-  await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
+  const url = `${config.host}/api/books/${config.bookId}/issue/build`;
+  if (sendBeaconJson(url, {})) {
+    return "Issue build triggered.";
+  }
+  await postJson(url, {});
   return "Issue build triggered.";
 };
 
@@ -168,10 +184,19 @@ const sendAction = async (action) => {
     setStatus("Set a Book ID first.");
     return;
   }
+  if (action === "buildIssue") {
+    try {
+      const status = await fallbackBuildIssue(config);
+      setStatus(status);
+    } catch (error) {
+      setStatus(error.message || String(error));
+    }
+    return;
+  }
+
   const needsBackground =
     (action === "updateBook" && (bulkCheckbox.checked || config.useMobileUA)) ||
-    (action === "sendArticle" && config.useMobileUA) ||
-    action === "buildIssue";
+    (action === "sendArticle" && config.useMobileUA);
 
   if (!needsBackground) {
     try {
