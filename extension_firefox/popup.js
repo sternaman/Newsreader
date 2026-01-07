@@ -3,9 +3,76 @@ const hostInput = document.getElementById("host");
 const bookInput = document.getElementById("bookId");
 const bulkCheckbox = document.getElementById("bulkCapture");
 const mobileCheckbox = document.getElementById("useMobileUA");
+const logsEl = document.getElementById("logs");
+const refreshLogsButton = document.getElementById("refreshLogs");
+const clearLogsButton = document.getElementById("clearLogs");
+
+const MAX_LOGS = 200;
 
 const setStatus = (msg) => {
   statusEl.textContent = msg;
+  void writeLog("status", msg);
+};
+
+const logEntryToLine = (entry) => {
+  const ts = entry?.ts || new Date().toISOString();
+  const level = entry?.level || "info";
+  const message = entry?.message || "";
+  let extra = "";
+  if (entry?.data) {
+    try {
+      extra = ` ${JSON.stringify(entry.data)}`;
+    } catch (error) {
+      extra = " [data]";
+    }
+  }
+  return `[${ts}] ${level.toUpperCase()}: ${message}${extra}`;
+};
+
+const appendLocalLog = async (entry) => {
+  const stored = await browser.storage.local.get("logs");
+  const logs = Array.isArray(stored.logs) ? stored.logs : [];
+  logs.push(entry);
+  const trimmed = logs.slice(-MAX_LOGS);
+  await browser.storage.local.set({ logs: trimmed });
+};
+
+const writeLog = async (level, message, data) => {
+  const entry = { ts: new Date().toISOString(), level, message, data };
+  try {
+    await browser.runtime.sendMessage({ type: "log", entry });
+    return;
+  } catch (error) {
+    await appendLocalLog(entry);
+  }
+};
+
+const loadLogs = async () => {
+  let logs = [];
+  try {
+    const response = await browser.runtime.sendMessage({ type: "getLogs" });
+    if (Array.isArray(response?.logs)) {
+      logs = response.logs;
+    }
+  } catch (error) {
+    const stored = await browser.storage.local.get("logs");
+    logs = Array.isArray(stored.logs) ? stored.logs : [];
+  }
+  if (logsEl) {
+    logsEl.value = logs.map(logEntryToLine).join("\n");
+    logsEl.scrollTop = logsEl.scrollHeight;
+  }
+};
+
+const clearLogs = async () => {
+  try {
+    await browser.runtime.sendMessage({ type: "clearLogs" });
+  } catch (error) {
+    await browser.storage.local.set({ logs: [] });
+  }
+  if (logsEl) {
+    logsEl.value = "";
+  }
 };
 
 const postJson = async (url, payload) => {
@@ -39,6 +106,7 @@ const getActiveTab = async () => {
 };
 
 const fallbackUpdateBook = async (config) => {
+  void writeLog("info", "Update book (fallback)", { bookId: config.bookId });
   const tab = await getActiveTab();
   if (!tab) {
     throw new Error("No active tab");
@@ -50,6 +118,7 @@ const fallbackUpdateBook = async (config) => {
 };
 
 const fallbackSendArticle = async (config) => {
+  void writeLog("info", "Send article (fallback)", { bookId: config.bookId });
   const tab = await getActiveTab();
   if (!tab) {
     throw new Error("No active tab");
@@ -80,6 +149,7 @@ const fallbackSendArticle = async (config) => {
 };
 
 const fallbackBuildIssue = async (config) => {
+  void writeLog("info", "Build issue (fallback)", { bookId: config.bookId });
   const url = `${config.host}/api/books/${config.bookId}/issue/build`;
   if (sendBeaconJson(url, {})) {
     return "Issue build triggered.";
@@ -89,18 +159,7 @@ const fallbackBuildIssue = async (config) => {
 };
 
 const callBackground = async (action, config, shouldBulk) => {
-  try {
-    const bg = await browser.runtime.getBackgroundPage();
-    if (bg && typeof bg.newsreaderHandleAction === "function") {
-      const response = await bg.newsreaderHandleAction(action, config, shouldBulk);
-      if (response?.error) {
-        throw new Error(response.error);
-      }
-      return response?.status || "Done.";
-    }
-  } catch (error) {
-    // Ignore and fall back to sendMessage.
-  }
+  void writeLog("info", "Dispatch action", { action, bookId: config.bookId });
   const response = await browser.runtime.sendMessage({
     action,
     config,
@@ -180,6 +239,12 @@ const sendAction = async (action) => {
     setStatus(error.message || String(error));
     return;
   }
+  void writeLog("info", "Action requested", {
+    action,
+    bookId: config.bookId,
+    bulkCapture: bulkCheckbox.checked,
+    useMobileUA: config.useMobileUA
+  });
   if (!config.bookId) {
     setStatus("Set a Book ID first.");
     return;
@@ -259,5 +324,12 @@ document.getElementById("saveConfig").addEventListener("click", saveConfig);
 document.getElementById("updateBook").addEventListener("click", () => sendAction("updateBook"));
 document.getElementById("sendArticle").addEventListener("click", () => sendAction("sendArticle"));
 document.getElementById("buildIssue").addEventListener("click", () => sendAction("buildIssue"));
+if (refreshLogsButton) {
+  refreshLogsButton.addEventListener("click", loadLogs);
+}
+if (clearLogsButton) {
+  clearLogsButton.addEventListener("click", clearLogs);
+}
 
 loadConfig();
+void loadLogs();

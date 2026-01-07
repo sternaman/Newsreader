@@ -6,6 +6,45 @@ const IMAGE_INLINE_TIMEOUT_MS = 15000;
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1";
 const WSJ_URLS = ["*://*.wsj.com/*"];
+const LOG_KEY = "logs";
+const LOG_MAX = 200;
+const PANEL_URL = browser.runtime.getURL("panel.html");
+const PANEL_WIDTH = 460;
+const PANEL_HEIGHT = 720;
+
+const appendLog = async (entry) => {
+  const stored = await browser.storage.local.get(LOG_KEY);
+  const logs = Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
+  logs.push(entry);
+  const trimmed = logs.slice(-LOG_MAX);
+  await browser.storage.local.set({ [LOG_KEY]: trimmed });
+};
+
+const writeLog = async (level, message, data) => {
+  const entry = { ts: new Date().toISOString(), level, message, data };
+  await appendLog(entry);
+};
+
+const focusOrOpenPanel = async () => {
+  const windows = await browser.windows.getAll({ populate: true });
+  for (const win of windows) {
+    for (const tab of win.tabs || []) {
+      if (tab.url && tab.url.startsWith(PANEL_URL)) {
+        await browser.windows.update(win.id, { focused: true });
+        if (tab.id) {
+          await browser.tabs.update(tab.id, { active: true });
+        }
+        return;
+      }
+    }
+  }
+  await browser.windows.create({
+    url: PANEL_URL,
+    type: "popup",
+    width: PANEL_WIDTH,
+    height: PANEL_HEIGHT
+  });
+};
 
 const isWsjUrl = (value) => {
   if (!value) {
@@ -227,6 +266,12 @@ const handleAction = async (action, config, shouldBulk) => {
   }
 
   try {
+    await writeLog("info", "Handle action", {
+      action,
+      bookId: config.bookId,
+      bulkCapture: Boolean(shouldBulk),
+      useMobileUA: Boolean(config.useMobileUA)
+    });
     const tabs = await browser.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     if (!tab) {
@@ -241,18 +286,23 @@ const handleAction = async (action, config, shouldBulk) => {
       if (shouldBulk) {
         const results = await bulkCapture(items, config);
         const okCount = results.filter((result) => result.status === "ok").length;
-        if (okCount > 0) {
-          try {
-            await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
-            return {
-              status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue built.`
-            };
-          } catch (error) {
-            return {
-              status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue build failed: ${error.message}`
-            };
+          if (okCount > 0) {
+            try {
+              await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
+              await writeLog("info", "Issue built after bulk capture", {
+                count: results.length,
+                okCount
+              });
+              return {
+                status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue built.`
+              };
+            } catch (error) {
+              await writeLog("error", "Issue build failed after bulk capture", { error: error.message });
+              return {
+                status: `Snapshot saved. Bulk captured ${results.length} items (${okCount} ok). Issue build failed: ${error.message}`
+              };
+            }
           }
-        }
         return {
           status: `Snapshot saved. Bulk captured ${results.length} items (0 ok). Issue not built.`
         };
@@ -288,24 +338,39 @@ const handleAction = async (action, config, shouldBulk) => {
         text_content: article.text_content || null,
         section: article.section || null
       });
+      await writeLog("info", "Article sent", { url: tab.url });
       return { status: "Article sent." };
     }
 
     if (action === "buildIssue") {
       await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
+      await writeLog("info", "Issue build triggered", { bookId: config.bookId });
       return { status: "Issue build triggered." };
     }
 
     return { error: "Unknown action" };
   } catch (error) {
+    await writeLog("error", "Action failed", { action, error: error.message || String(error) });
     return { error: error.message || String(error) };
   }
 };
 
-const globalScope = typeof window !== "undefined" ? window : globalThis;
-globalScope.newsreaderHandleAction = handleAction;
-
 browser.runtime.onMessage.addListener((message) => {
+  if (message?.type === "log" && message.entry) {
+    return appendLog(message.entry).then(() => ({ status: "ok" }));
+  }
+  if (message?.type === "getLogs") {
+    return browser.storage.local.get(LOG_KEY).then((stored) => ({
+      logs: Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : []
+    }));
+  }
+  if (message?.type === "clearLogs") {
+    return browser.storage.local.set({ [LOG_KEY]: [] }).then(() => ({ status: "ok" }));
+  }
   const { action, config, bulkCapture: shouldBulk } = message || {};
   return handleAction(action, config, shouldBulk);
+});
+
+browser.action.onClicked.addListener(() => {
+  void focusOrOpenPanel();
 });

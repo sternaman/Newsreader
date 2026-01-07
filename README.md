@@ -30,6 +30,7 @@ Data persists in a named Docker volume at `/data` inside the container.
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on**.
 3. Select `extension_firefox/manifest.json`.
+4. Click the toolbar icon to open the **Newsreader Control Panel** window (it stays open for debugging).
 
 ## Create a Book
 
@@ -39,7 +40,7 @@ Data persists in a named Docker volume at `/data` inside the container.
 ## Capture a Reading List (Update Book)
 
 1. Navigate to a page that contains links you want captured.
-2. Open the extension popup.
+2. Open the extension control panel (toolbar icon).
 3. Enter Host URL (default `http://localhost:8000`) and Book ID.
    - If the host runs on another machine, set Host URL to `http://<host-ip>:8000`.
 4. Click **Update Book** to send a snapshot list to the host.
@@ -49,7 +50,7 @@ Data persists in a named Docker volume at `/data` inside the container.
 ## Capture an Article (Send Article)
 
 1. Open the article you want to capture.
-2. Click **Send Article** in the extension.
+2. Click **Send Article** in the extension control panel.
    - Readability-based extraction is used; if it fails, the full HTML is sent.
    - Images are inlined as data URLs when possible to preserve charts behind logins.
    - Byline, published time, section, and reading time are shown when available.
@@ -87,7 +88,7 @@ curl http://localhost:8000/api/books
 
 ```
 /extension         Chrome MV3 extension
-/extension_firefox Firefox MV2 extension
+/extension_firefox Firefox MV3 extension
 /services/api      FastAPI application + UI
 /services/renderer EPUB build helper
 /docker-compose.yml

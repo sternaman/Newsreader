@@ -1,5 +1,16 @@
 const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
 
+const logEvent = (level, message, data) => {
+  try {
+    browser.runtime.sendMessage({
+      type: "log",
+      entry: { ts: new Date().toISOString(), level, message, data }
+    });
+  } catch (error) {
+    // Ignore logging failures in content scripts.
+  }
+};
+
 const isWsjHost = (hostname) => hostname === "wsj.com" || hostname.endsWith(".wsj.com");
 
 const isLikelyWsjArticleUrl = (url) => {
@@ -70,6 +81,7 @@ const extractListItems = () => {
   if (isWsjHost(window.location.hostname)) {
     const wsjItems = extractWsjFrontPageItems();
     if (wsjItems.length > 0) {
+      logEvent("info", "WSJ list extracted", { count: wsjItems.length });
       return wsjItems;
     }
   }
@@ -81,6 +93,7 @@ const extractListItems = () => {
       title: normalizeText(link.textContent),
       url: link.href
     }));
+  logEvent("info", "Generic list extracted", { count: items.length });
   return items;
 };
 
@@ -219,8 +232,10 @@ const extractArticle = () => {
       };
     }
   } catch (error) {
+    logEvent("error", "Readability failed", { error: error.message || String(error) });
     console.warn("Readability failed", error);
   }
+  logEvent("info", "Fallback HTML used", { url: window.location.href });
   const fallbackHtml = cleanupArticleHtml(fallbackContentHtml());
   return {
     title: document.title,

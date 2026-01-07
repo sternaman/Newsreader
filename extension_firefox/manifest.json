@@ -1,14 +1,15 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "Newsreader Pipeline",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Capture reading lists and articles for the Newsreader host.",
-  "permissions": ["storage", "tabs", "activeTab", "webRequest", "webRequestBlocking", "<all_urls>"],
-  "browser_action": {
-    "default_popup": "popup.html"
+  "permissions": ["storage", "tabs", "activeTab", "webRequest", "webRequestBlocking"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Newsreader Pipeline"
   },
   "background": {
-    "scripts": ["service_worker.js"]
+    "service_worker": "service_worker.js"
   },
   "content_scripts": [
     {
