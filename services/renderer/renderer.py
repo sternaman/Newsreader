@@ -100,6 +100,22 @@ _JUNK_PHRASES = [
     r"www\.djreprints\.com",
     r"1-800-843-0008",
 ]
+_JUNK_TEXT_LINES = [
+    r"^share$",
+    r"^resize$",
+    r"^print$",
+    r"^gift unlocked$",
+    r"^listen$",
+    r"^listen to article$",
+]
+
+_CSS_DUMP_PATTERNS = [
+    r"/\*\s*theme vars",
+    r"--colors-",
+    r"--space-presets-",
+    r"--typography-presets-",
+    r":host\s*\{",
+]
 
 
 def sanitize_html(html: str) -> str:
@@ -224,10 +240,38 @@ def _html_text_length(content_html: str) -> int:
     return len(re.sub(r"\s+", " ", stripped).strip())
 
 
-def _text_to_paragraphs(text_content: Optional[str]) -> str:
+def _looks_like_css_dump(content_html: str) -> bool:
+    for pattern in _CSS_DUMP_PATTERNS:
+        if re.search(pattern, content_html, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _clean_text_content(text_content: Optional[str]) -> str:
     if not text_content:
         return ""
-    chunks = [chunk.strip() for chunk in re.split(r"\n{2,}", text_content) if chunk.strip()]
+    lines = []
+    for raw_line in text_content.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            lines.append("")
+            continue
+        if re.match(r"^https?://", stripped, flags=re.IGNORECASE):
+            continue
+        if any(re.search(pattern, stripped, flags=re.IGNORECASE) for pattern in _JUNK_TEXT_LINES):
+            continue
+        if any(re.search(pattern, stripped, flags=re.IGNORECASE) for pattern in _JUNK_PHRASES):
+            continue
+        lines.append(stripped)
+    cleaned = "\n".join(lines)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _text_to_paragraphs(text_content: Optional[str]) -> str:
+    cleaned = _clean_text_content(text_content)
+    if not cleaned:
+        return ""
+    chunks = [chunk.strip() for chunk in re.split(r"\n{2,}", cleaned) if chunk.strip()]
     if not chunks:
         return ""
     return "".join(f"<p>{html.escape(chunk, quote=True)}</p>" for chunk in chunks)
@@ -329,7 +373,12 @@ def build_issue_epub(
         if chapter_title.endswith(" - WSJ"):
             chapter_title = chapter_title[:-6]
         content_html = _normalize_scene_breaks(chapter["content_html"])
-        if _html_text_length(content_html) < MIN_CONTENT_TEXT_LEN:
+        content_looks_bad = _html_text_length(content_html) < MIN_CONTENT_TEXT_LEN
+        if not content_looks_bad:
+            source_domain = (chapter.get("source_domain") or "").lower()
+            if "wsj.com" in source_domain and _looks_like_css_dump(content_html):
+                content_looks_bad = True
+        if content_looks_bad:
             fallback_html = _text_to_paragraphs(chapter.get("text_content"))
             if fallback_html:
                 content_html = fallback_html

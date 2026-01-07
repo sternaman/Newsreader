@@ -127,6 +127,13 @@ const cleanupArticleHtml = (html) => {
   }
   const doc = new DOMParser().parseFromString(html, "text/html");
   const MAX_JUNK_LENGTH = 300;
+  const cssTextPatterns = [
+    /\/\*\s*theme vars/i,
+    /--colors-/i,
+    /--space-presets-/i,
+    /--typography-presets-/i,
+    /:host\s*\{/i
+  ];
   const junkPatterns = [
     /skip to main content/i,
     /this copy is for your personal, non-commercial use only/i,
@@ -134,6 +141,12 @@ const cleanupArticleHtml = (html) => {
     /dow jones reprints/i,
     /djreprints\.com/i,
     /1-800-843-0008/i,
+    /gift unlocked/i,
+    /listen to article/i,
+    /^listen$/i,
+    /^share$/i,
+    /^resize$/i,
+    /^print$/i,
     /what to read next/i,
     /most popular/i,
     /recommended videos/i
@@ -172,6 +185,10 @@ const cleanupArticleHtml = (html) => {
     if (!text) {
       return;
     }
+    if (cssTextPatterns.some((pattern) => pattern.test(text))) {
+      el.remove();
+      return;
+    }
     if (text.length > MAX_JUNK_LENGTH) {
       return;
     }
@@ -180,6 +197,20 @@ const cleanupArticleHtml = (html) => {
         el.remove();
         break;
       }
+    }
+  });
+  doc.querySelectorAll("p").forEach((el) => {
+    const link = el.querySelector("a[href]");
+    if (!link) {
+      return;
+    }
+    const text = normalizeText(el.textContent || "");
+    if (/^https?:\/\//i.test(text) && text.length <= 200) {
+      el.remove();
+      return;
+    }
+    if (text === link.href) {
+      el.remove();
     }
   });
   doc.querySelectorAll("a[href*='/market-data/quotes']").forEach((el) => el.remove());
