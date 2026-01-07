@@ -1,5 +1,6 @@
 const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const MIN_ARTICLE_TEXT_LENGTH = 200;
 
 const logEvent = (level, message, data) => {
   try {
@@ -249,7 +250,20 @@ const extractArticle = () => {
     const article = reader.parse();
     if (article && article.content) {
       const textContent = article.textContent || document.body?.innerText || null;
-      const cleanedHtml = cleanupArticleHtml(article.content);
+      let cleanedHtml = cleanupArticleHtml(article.content);
+      let cleanedTextLength = 0;
+      try {
+        const parsed = new DOMParser().parseFromString(cleanedHtml, "text/html");
+        cleanedTextLength = normalizeText(parsed.body?.innerText || "").length;
+      } catch (error) {
+        cleanedTextLength = 0;
+      }
+      if (cleanedTextLength < MIN_ARTICLE_TEXT_LENGTH) {
+        logEvent("warn", "Readability content too short, using fallback HTML", {
+          cleanedTextLength
+        });
+        cleanedHtml = cleanupArticleHtml(fallbackContentHtml());
+      }
       return {
         title: article.title || document.title,
         byline: article.byline,

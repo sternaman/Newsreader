@@ -13,6 +13,7 @@ from ebooklib import epub
 from dateutil import parser, tz
 
 SCENE_BREAK_MARKER = "* * *"
+MIN_CONTENT_TEXT_LEN = 200
 
 ALLOWED_TAGS = bleach.sanitizer.ALLOWED_TAGS.union(
     {
@@ -23,12 +24,14 @@ ALLOWED_TAGS = bleach.sanitizer.ALLOWED_TAGS.union(
         "figure",
         "figcaption",
         "img",
+        "div",
         "h1",
         "h2",
         "h3",
         "h4",
         "h5",
         "h6",
+        "p",
         "pre",
         "code",
         "blockquote",
@@ -214,6 +217,22 @@ def _normalize_scene_breaks(content_html: str) -> str:
     return content_html
 
 
+def _html_text_length(content_html: str) -> int:
+    if not content_html:
+        return 0
+    stripped = re.sub(r"<[^>]+>", " ", content_html)
+    return len(re.sub(r"\s+", " ", stripped).strip())
+
+
+def _text_to_paragraphs(text_content: Optional[str]) -> str:
+    if not text_content:
+        return ""
+    chunks = [chunk.strip() for chunk in re.split(r"\n{2,}", text_content) if chunk.strip()]
+    if not chunks:
+        return ""
+    return "".join(f"<p>{html.escape(chunk, quote=True)}</p>" for chunk in chunks)
+
+
 def _render_metadata(
     *,
     byline: Optional[str],
@@ -308,6 +327,10 @@ def build_issue_epub(
     for idx, chapter in enumerate(chapters, start=1):
         chapter_title = chapter["title"]
         content_html = _normalize_scene_breaks(chapter["content_html"])
+        if _html_text_length(content_html) < MIN_CONTENT_TEXT_LEN:
+            fallback_html = _text_to_paragraphs(chapter.get("text_content"))
+            if fallback_html:
+                content_html = fallback_html
         meta_html = _render_metadata(
             byline=chapter.get("byline"),
             excerpt=chapter.get("excerpt"),
