@@ -277,6 +277,39 @@ const extractArticle = () => {
   };
 };
 
+const getArticleTextLength = () => {
+  const node =
+    document.querySelector("article") ||
+    document.querySelector("main") ||
+    document.body ||
+    document.documentElement;
+  const text = normalizeText(node?.innerText || "");
+  return text.length;
+};
+
+const waitForArticleContent = async (options = {}) => {
+  const timeoutMs = options.timeoutMs || 12000;
+  const intervalMs = options.intervalMs || 400;
+  const minTextLength = options.minTextLength || 400;
+  const start = Date.now();
+  let length = getArticleTextLength();
+  while (length < minTextLength && Date.now() - start < timeoutMs) {
+    await sleep(intervalMs);
+    length = getArticleTextLength();
+  }
+  return {
+    waitedMs: Date.now() - start,
+    textLength: length,
+    minTextLength
+  };
+};
+
+const extractArticleWait = async (options = {}) => {
+  const result = await waitForArticleContent(options);
+  logEvent("info", "Article wait complete", result);
+  return extractArticle();
+};
+
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "extractList") {
     logEvent("info", "Extract list requested", {
@@ -300,5 +333,12 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.action === "captureArticle") {
     sendResponse({ article: extractArticle() });
+    return;
+  }
+  if (message.action === "captureArticleWait") {
+    extractArticleWait(message.options || {})
+      .then((article) => sendResponse({ article }))
+      .catch((error) => sendResponse({ error: error.message || String(error) }));
+    return true;
   }
 });

@@ -16,6 +16,11 @@ const RETRY_ATTEMPTS = 5;
 let lastContentTabId = null;
 let lastContentTabUrl = null;
 const injectedTabs = new Set();
+const ARTICLE_WAIT_OPTIONS = {
+  timeoutMs: 12000,
+  intervalMs: 400,
+  minTextLength: 400
+};
 
 const appendLog = async (entry) => {
   const stored = await browser.storage.local.get(LOG_KEY);
@@ -315,8 +320,11 @@ const extractListForUpdate = async (tab, config) => {
   }
 };
 
-const captureArticleFromTab = async (tabId) => {
-  const response = await sendMessageWithRetry(tabId, { action: "captureArticle" });
+const captureArticleFromTab = async (tabId, options = {}) => {
+  const response = await sendMessageWithRetry(tabId, {
+    action: "captureArticleWait",
+    options
+  });
   return response?.article;
 };
 
@@ -351,7 +359,7 @@ const bulkCapture = async (items, config) => {
       removeListener = opened.removeListener;
       await waitForTabLoad(tab.id);
       await ensureContentScriptsIfNeeded(tab.id, false);
-      const article = await captureArticleFromTab(tab.id);
+      const article = await captureArticleFromTab(tab.id, ARTICLE_WAIT_OPTIONS);
       if (!article || !article.content_html) {
         throw new Error("Article extraction failed");
       }
@@ -452,7 +460,7 @@ const handleAction = async (action, config, shouldBulk) => {
         }
         return { status: "Article sent." };
       }
-      const article = await captureArticleFromTab(tab.id);
+      const article = await captureArticleFromTab(tab.id, ARTICLE_WAIT_OPTIONS);
       if (!article || !article.content_html) {
         return { error: "Article extraction failed" };
       }
