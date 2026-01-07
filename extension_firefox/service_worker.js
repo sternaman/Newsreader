@@ -371,6 +371,9 @@ browser.runtime.onMessage.addListener((message) => {
   return handleAction(action, config, shouldBulk);
 });
 
-browser.action.onClicked.addListener(() => {
-  void focusOrOpenPanel();
-});
+const actionApi = browser.action || browser.browserAction;
+if (actionApi?.onClicked) {
+  actionApi.onClicked.addListener(() => {
+    void focusOrOpenPanel();
+  });
+}

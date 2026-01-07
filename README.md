@@ -32,6 +32,10 @@ Data persists in a named Docker volume at `/data` inside the container.
 3. Select `extension_firefox/manifest.json`.
 4. Click the toolbar icon to open the **Newsreader Control Panel** window (it stays open for debugging).
 
+Firefox MV3 note:
+- The default manifest is MV2 for compatibility.
+- If you want MV3, enable `extensions.manifestV3.enabled` and `extensions.backgroundServiceWorker.enabled` in `about:config`, then load `extension_firefox/manifest_mv3.json`.
+
 ## Create a Book
 
 - Visit `http://localhost:8000` and create a Book.
@@ -88,7 +92,7 @@ curl http://localhost:8000/api/books
 
 ```
 /extension         Chrome MV3 extension
-/extension_firefox Firefox MV3 extension
+/extension_firefox Firefox MV2 extension (MV3 optional via manifest_mv3.json)
 /services/api      FastAPI application + UI
 /services/renderer EPUB build helper
 /docker-compose.yml
