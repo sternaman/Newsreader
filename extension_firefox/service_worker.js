@@ -15,6 +15,7 @@ const RETRY_DELAY_MS = 400;
 const RETRY_ATTEMPTS = 5;
 let lastContentTabId = null;
 let lastContentTabUrl = null;
+const injectedTabs = new Set();
 
 const appendLog = async (entry) => {
   const stored = await browser.storage.local.get(LOG_KEY);
@@ -92,6 +93,17 @@ const ensureContentScripts = async (tabId) => {
     await browser.tabs.executeScript(tabId, { file: "content_script.js" });
   } catch (error) {
     // Ignore duplicate injections or restricted pages.
+  }
+};
+
+const ensureContentScriptsIfNeeded = async (tabId, logOnInject) => {
+  if (injectedTabs.has(tabId)) {
+    return;
+  }
+  await ensureContentScripts(tabId);
+  injectedTabs.add(tabId);
+  if (logOnInject) {
+    await writeLog("info", "Injected content scripts", { tabId });
   }
 };
 
@@ -252,6 +264,7 @@ const openCaptureTab = async (url, useMobileUA) => {
 
 const sendMessageWithRetry = async (tabId, message) => {
   let lastError = null;
+  await ensureContentScriptsIfNeeded(tabId, false);
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt += 1) {
     try {
       return await browser.tabs.sendMessage(tabId, message);
@@ -261,8 +274,7 @@ const sendMessageWithRetry = async (tabId, message) => {
         throw error;
       }
       if (attempt === 0) {
-        await writeLog("warn", "Content script missing, attempting inject", { tabId });
-        await ensureContentScripts(tabId);
+        await ensureContentScriptsIfNeeded(tabId, true);
       }
       await sleep(RETRY_DELAY_MS);
     }
@@ -283,6 +295,7 @@ const extractListForUpdate = async (tab, config) => {
     intervalMs: 400
   };
   if (!config.useMobileUA || !isWsjUrl(tab?.url)) {
+    await ensureContentScriptsIfNeeded(tab.id, false);
     return extractListFromTab(tab.id, waitOptions);
   }
   let tempTab = null;
@@ -292,6 +305,7 @@ const extractListForUpdate = async (tab, config) => {
     tempTab = opened.tab;
     removeListener = opened.removeListener;
     await waitForTabLoad(tempTab.id);
+    await ensureContentScriptsIfNeeded(tempTab.id, false);
     return await extractListFromTab(tempTab.id, waitOptions);
   } finally {
     removeListener();
@@ -336,6 +350,7 @@ const bulkCapture = async (items, config) => {
       tab = opened.tab;
       removeListener = opened.removeListener;
       await waitForTabLoad(tab.id);
+      await ensureContentScriptsIfNeeded(tab.id, false);
       const article = await captureArticleFromTab(tab.id);
       if (!article || !article.content_html) {
         throw new Error("Article extraction failed");
