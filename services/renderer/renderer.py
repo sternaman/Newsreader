@@ -88,9 +88,24 @@ blockquote { border-left: 3px solid #999; padding-left: 0.8em; color: #333; }
 """
 
 
+_JUNK_PHRASES = [
+    r"Skip to Main Content",
+    r"Skip to\.\.\.",
+    r"This copy is for your personal, non-commercial use only",
+    r"Subscriber Agreement",
+    r"Dow Jones Reprints",
+    r"www\.djreprints\.com",
+    r"1-800-843-0008",
+]
+
+
 def sanitize_html(html: str) -> str:
+    pre = re.sub(r"<(script|style|noscript)[^>]*>.*?</\\1>", "", html, flags=re.IGNORECASE | re.DOTALL)
+    pre = re.sub(r"<!--.*?-->", "", pre, flags=re.DOTALL)
+    for pattern in _JUNK_PHRASES:
+        pre = re.sub(pattern, "", pre, flags=re.IGNORECASE)
     cleaned = bleach.clean(
-        html,
+        pre,
         tags=ALLOWED_TAGS,
         attributes=ALLOWED_ATTRS,
         protocols=["http", "https", "mailto", "data"],

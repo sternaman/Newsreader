@@ -126,6 +126,17 @@ const cleanupArticleHtml = (html) => {
     return html;
   }
   const doc = new DOMParser().parseFromString(html, "text/html");
+  const junkPatterns = [
+    /skip to main content/i,
+    /this copy is for your personal, non-commercial use only/i,
+    /subscriber agreement/i,
+    /dow jones reprints/i,
+    /djreprints\.com/i,
+    /1-800-843-0008/i,
+    /what to read next/i,
+    /most popular/i,
+    /recommended videos/i
+  ];
   const selectors = [
     "header",
     "nav",
@@ -155,6 +166,19 @@ const cleanupArticleHtml = (html) => {
     "[id*='nav']"
   ];
   doc.querySelectorAll(selectors.join(",")).forEach((el) => el.remove());
+  doc.querySelectorAll("p, div, span, li").forEach((el) => {
+    const text = normalizeText(el.textContent || "");
+    if (!text) {
+      return;
+    }
+    for (const pattern of junkPatterns) {
+      if (pattern.test(text)) {
+        el.remove();
+        break;
+      }
+    }
+  });
+  doc.querySelectorAll("a[href*='/market-data/quotes']").forEach((el) => el.remove());
   doc.querySelectorAll("h1").forEach((el) => el.remove());
   doc.querySelectorAll("a").forEach((link) => {
     const text = normalizeText(link.textContent || "");
