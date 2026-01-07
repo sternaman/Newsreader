@@ -72,6 +72,30 @@ const fallbackBuildIssue = async (config) => {
   return "Issue build triggered.";
 };
 
+const callBackground = async (action, config, shouldBulk) => {
+  try {
+    const bg = await browser.runtime.getBackgroundPage();
+    if (bg && typeof bg.newsreaderHandleAction === "function") {
+      const response = await bg.newsreaderHandleAction(action, config, shouldBulk);
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+      return response?.status || "Done.";
+    }
+  } catch (error) {
+    // Ignore and fall back to sendMessage.
+  }
+  const response = await browser.runtime.sendMessage({
+    action,
+    config,
+    bulkCapture: shouldBulk
+  });
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+  return response?.status || "Done.";
+};
+
 const normalizeHost = (value) => {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -144,70 +168,46 @@ const sendAction = async (action) => {
     setStatus("Set a Book ID first.");
     return;
   }
-  if (action === "buildIssue") {
+  const needsBackground =
+    (action === "updateBook" && (bulkCheckbox.checked || config.useMobileUA)) ||
+    (action === "sendArticle" && config.useMobileUA) ||
+    action === "buildIssue";
+
+  if (!needsBackground) {
     try {
-      const status = await fallbackBuildIssue(config);
+      let status;
+      if (action === "updateBook") {
+        status = await fallbackUpdateBook(config);
+      } else if (action === "sendArticle") {
+        status = await fallbackSendArticle(config);
+      } else {
+        status = await fallbackBuildIssue(config);
+      }
       setStatus(status);
     } catch (error) {
       setStatus(error.message || String(error));
     }
     return;
   }
-  if (action === "updateBook" && !bulkCheckbox.checked && !config.useMobileUA) {
-    try {
-      const status = await fallbackUpdateBook(config);
-      setStatus(status);
-    } catch (error) {
-      setStatus(error.message || String(error));
-    }
-    return;
-  }
-  if (action === "sendArticle" && !config.useMobileUA) {
-    try {
-      const status = await fallbackSendArticle(config);
-      setStatus(status);
-    } catch (error) {
-      setStatus(error.message || String(error));
-    }
-    return;
-  }
+
   try {
-    const response = await browser.runtime.sendMessage({
-      action,
-      config,
-      bulkCapture: bulkCheckbox.checked
-    });
-    if (response?.error) {
-      setStatus(response.error);
-    } else {
-      setStatus(response?.status || "Done.");
-    }
+    const status = await callBackground(action, config, bulkCheckbox.checked);
+    setStatus(status);
   } catch (error) {
     const message = error?.message || String(error);
-    if (/Receiving end does not exist/i.test(message)) {
+    if (action === "buildIssue") {
       try {
-        let status;
-        if (action === "buildIssue") {
-          status = await fallbackBuildIssue(config);
-        } else if (action === "updateBook") {
-          status = await fallbackUpdateBook(config);
-          if (bulkCheckbox.checked) {
-            status = `${status} Bulk capture requires the background script. Reload the add-on.`;
-          }
-        } else if (action === "sendArticle") {
-          if (config.useMobileUA) {
-            throw new Error("Mobile capture needs the background script. Reload the add-on or disable the mobile toggle.");
-          }
-          status = await fallbackSendArticle(config);
-        } else {
-          throw new Error(message);
-        }
+        const status = await fallbackBuildIssue(config);
         setStatus(status);
         return;
       } catch (fallbackError) {
         setStatus(fallbackError.message || String(fallbackError));
         return;
       }
+    }
+    if (/Receiving end does not exist/i.test(message)) {
+      setStatus("Background not ready. Reload the add-on and try again.");
+      return;
     }
     setStatus(message);
   }

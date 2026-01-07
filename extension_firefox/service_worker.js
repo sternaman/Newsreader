@@ -218,10 +218,12 @@ const bulkCapture = async (items, config) => {
   return results;
 };
 
-browser.runtime.onMessage.addListener(async (message) => {
-  const { action, config, bulkCapture: shouldBulk } = message;
+const handleAction = async (action, config, shouldBulk) => {
   if (!action) {
     return {};
+  }
+  if (!config || !config.host || !config.bookId) {
+    return { error: "Missing host or Book ID" };
   }
 
   try {
@@ -298,4 +300,12 @@ browser.runtime.onMessage.addListener(async (message) => {
   } catch (error) {
     return { error: error.message || String(error) };
   }
+};
+
+const globalScope = typeof window !== "undefined" ? window : globalThis;
+globalScope.newsreaderHandleAction = handleAction;
+
+browser.runtime.onMessage.addListener((message) => {
+  const { action, config, bulkCapture: shouldBulk } = message || {};
+  return handleAction(action, config, shouldBulk);
 });
