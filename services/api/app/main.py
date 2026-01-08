@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import shlex
@@ -7,7 +8,7 @@ from datetime import datetime, date
 
 from dateutil import tz
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -126,6 +127,53 @@ def _summarize_audit(audit_entries: list) -> dict:
         for issue in issues:
             summary["issues"][issue] = summary["issues"].get(issue, 0) + 1
     return summary
+
+
+def _opds_timestamp(value: str | None) -> str:
+    if not value:
+        return _now_local().isoformat()
+    try:
+        return datetime.fromisoformat(value).isoformat()
+    except ValueError:
+        return _now_local().isoformat()
+
+
+def _render_opds_feed(issues: list, *, base_url: str) -> str:
+    updated = _now_local().isoformat()
+    feed_id = f"{base_url}/opds"
+    entries = []
+    for issue in issues:
+        title = issue.get("title") or f"Issue {issue.get('id')}"
+        book_name = issue.get("book_name") or ""
+        updated_at = _opds_timestamp(issue.get("updated_at") or issue.get("created_at"))
+        author_block = ""
+        if book_name:
+            author_block = f"<author><name>{html.escape(book_name, quote=True)}</name></author>"
+        entry_lines = [
+            "<entry>",
+            f"  <title>{html.escape(title, quote=True)}</title>",
+            f"  <id>tag:newsreader:issue:{issue.get('id')}</id>",
+            f"  <updated>{updated_at}</updated>",
+            f"  {author_block}" if author_block else "",
+            "  <link rel=\"http://opds-spec.org/acquisition\" type=\"application/epub+zip\" "
+            f"href=\"/download/{issue.get('id')}.epub\" />",
+            "</entry>",
+        ]
+        entries.append("\n".join(line for line in entry_lines if line))
+    entries_xml = "\n".join(line for line in entries if line)
+    return "\n".join(
+        [
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+            "<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opds=\"http://opds-spec.org/2010/catalog\">",
+            f"  <id>{html.escape(feed_id, quote=True)}</id>",
+            "  <title>Newsreader Catalog</title>",
+            f"  <updated>{updated}</updated>",
+            "  <link rel=\"self\" type=\"application/atom+xml\" href=\"/opds\" />",
+            "  <link rel=\"start\" type=\"application/atom+xml\" href=\"/opds\" />",
+            entries_xml,
+            "</feed>",
+        ]
+    )
 
 
 def _book_or_404(book_id: int):
@@ -547,6 +595,27 @@ async def build_issue_api(book_id: int):
 async def current_issue_api(book_id: int):
     issue = _current_issue(book_id)
     return {"issue_id": issue["id"], "title": issue["title"], "issue_date": issue["issue_date"]}
+
+
+@app.get("/opds")
+@app.get("/opds.xml")
+async def opds_catalog(request: Request):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT issues.*, books.name AS book_name FROM issues "
+            "JOIN books ON books.id = issues.book_id "
+            "WHERE issues.build_status = 'complete' "
+            "ORDER BY issue_date DESC, issues.id DESC LIMIT 200"
+        ).fetchall()
+    issues = []
+    for row in rows:
+        item = dict(row)
+        epub_path = item.get("epub_path")
+        if epub_path and os.path.exists(epub_path):
+            issues.append(item)
+    base_url = str(request.base_url).rstrip("/")
+    xml = _render_opds_feed(issues, base_url=base_url)
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog;kind=acquisition")
 
 
 @app.get("/download/{issue_id}.epub")

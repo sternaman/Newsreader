@@ -3,6 +3,11 @@ const DEFAULT_THROTTLE_MS = 1500;
 const IMAGE_INLINE_MAX_COUNT = 15;
 const IMAGE_INLINE_MAX_BYTES = 2 * 1024 * 1024;
 const IMAGE_INLINE_TIMEOUT_MS = 15000;
+const ARTICLE_WAIT_OPTIONS = {
+  timeoutMs: 12000,
+  intervalMs: 400,
+  minTextLength: 400
+};
 
 const buildHeaders = () => ({
   "Content-Type": "application/json"
@@ -87,7 +92,7 @@ const extractListFromTab = async (tabId) => {
 
 const captureArticleFromTab = async (tabId) => {
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { action: "captureArticle" }, (response) => {
+    chrome.tabs.sendMessage(tabId, { action: "captureArticleWait", options: ARTICLE_WAIT_OPTIONS }, (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
       } else {

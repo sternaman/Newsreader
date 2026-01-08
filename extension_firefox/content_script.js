@@ -54,14 +54,18 @@ const isLikelyWsjArticleUrl = (url) => {
   if (mod && mod.startsWith("nav")) {
     return false;
   }
-  if (path.includes("/articles/")) {
-    return true;
-  }
   const last = path.split("/").filter(Boolean).pop() || "";
-  if (last.length < 12 || last.split("-").length < 3) {
+  if (!/-[0-9a-f]{8}$/i.test(last)) {
     return false;
   }
-  if (/news|markets|opinion|personal-finance|real-estate|lifestyle|business|world|economy|tech|arts|sports|science|us/i.test(last)) {
+  if (
+    /latest-headlines|print-edition|livecoverage|live-coverage|journalcollection|buy-side|video|podcasts/i.test(last)
+  ) {
+    return false;
+  }
+  if (
+    /news|markets|opinion|personal-finance|real-estate|lifestyle|business|world|economy|tech|arts|sports|science|us/i.test(last)
+  ) {
     return false;
   }
   return true;
@@ -151,9 +155,9 @@ const extractListWithWait = async (options = {}) => {
   return items;
 };
 
-const extractMetaContent = (selectors) => {
+const extractMetaContent = (selectors, doc = document) => {
   for (const selector of selectors) {
-    const el = document.querySelector(selector);
+    const el = doc.querySelector(selector);
     if (el && el.content) {
       const value = el.content.trim();
       if (value) {
@@ -164,7 +168,7 @@ const extractMetaContent = (selectors) => {
   return null;
 };
 
-const extractSection = () =>
+const extractSection = (doc) =>
   extractMetaContent([
     "meta[property='article:section']",
     "meta[name='article:section']",
@@ -172,9 +176,9 @@ const extractSection = () =>
     "meta[property='section']",
     "meta[name='parsely-section']",
     "meta[name='dc.subject']"
-  ]);
+  ], doc);
 
-const extractByline = () =>
+const extractByline = (doc) =>
   extractMetaContent([
     "meta[name='author']",
     "meta[property='author']",
@@ -183,9 +187,9 @@ const extractByline = () =>
     "meta[name='sailthru.author']",
     "meta[name='dc.creator']",
     "meta[name='byl']"
-  ]);
+  ], doc);
 
-const extractPublishedAtRaw = () =>
+const extractPublishedAtRaw = (doc) =>
   extractMetaContent([
     "meta[property='article:published_time']",
     "meta[name='article:published_time']",
@@ -197,7 +201,7 @@ const extractPublishedAtRaw = () =>
     "meta[name='dc.date']",
     "meta[name='parsely-pub-date']",
     "meta[name='sailthru.date']"
-  ]);
+  ], doc);
 
 const parseSrcsetBestUrl = (srcset) => {
   if (!srcset) {
@@ -228,6 +232,59 @@ const parseSrcsetBestUrl = (srcset) => {
     }
   }
   return bestUrl || entries[entries.length - 1].split(/\s+/)[0];
+};
+
+const getAmpUrl = (doc = document) => {
+  const link = doc.querySelector("link[rel='amphtml']");
+  if (link && link.href) {
+    return link.href;
+  }
+  const canonical = doc.querySelector("link[rel='canonical']");
+  if (canonical && canonical.href && canonical.href.includes("/amp/")) {
+    return canonical.href;
+  }
+  return null;
+};
+
+const normalizeAmpDocument = (doc) => {
+  if (!doc) {
+    return;
+  }
+  const removeTags = ["amp-iframe", "amp-video", "amp-ad", "amp-analytics", "amp-social-share"];
+  removeTags.forEach((tag) => doc.querySelectorAll(tag).forEach((node) => node.remove()));
+  doc.querySelectorAll("amp-img").forEach((node) => {
+    const img = doc.createElement("img");
+    const srcset = node.getAttribute("data-srcset") || node.getAttribute("srcset");
+    const srcsetUrl = parseSrcsetBestUrl(srcset);
+    const src = srcsetUrl || node.getAttribute("data-src") || node.getAttribute("src");
+    if (src) {
+      img.setAttribute("src", src);
+    }
+    const alt = node.getAttribute("alt");
+    if (alt) {
+      img.setAttribute("alt", alt);
+    }
+    node.replaceWith(img);
+  });
+};
+
+const fetchAmpDocument = async (ampUrl) => {
+  if (!ampUrl) {
+    return null;
+  }
+  try {
+    const response = await fetch(ampUrl, { credentials: "include" });
+    if (!response.ok) {
+      return null;
+    }
+    const text = await response.text();
+    const doc = new DOMParser().parseFromString(text, "text/html");
+    normalizeAmpDocument(doc);
+    return doc;
+  } catch (error) {
+    logEvent("warn", "AMP fetch failed", { url: ampUrl, error: error.message || String(error) });
+    return null;
+  }
 };
 
 const pickPictureSource = (img) => {
@@ -508,7 +565,15 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
     /conversation/i,
     /what to read next/i,
     /most popular/i,
-    /recommended videos/i
+    /recommended videos/i,
+    /videos most popular/i,
+    /most popular news/i,
+    /further reading/i,
+    /show conversation/i,
+    /advertisement/i,
+    /coverage and analysis/i,
+    /navigating the markets/i,
+    /^write to\b/i
   ];
   const selectors = [
     "nav",
@@ -628,6 +693,21 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
       el.remove();
     }
   });
+  doc.querySelectorAll("a[href]").forEach((link) => {
+    const text = normalizeText(link.textContent || "");
+    if (!/^https?:\/\//i.test(text)) {
+      return;
+    }
+    if (link.href !== text) {
+      return;
+    }
+    const parent = link.closest("p, div, section, li");
+    if (parent && normalizeText(parent.textContent || "") === text) {
+      parent.remove();
+    } else {
+      link.remove();
+    }
+  });
   removeUrlOnlyBlocks(doc);
   if (isWsj) {
     stripLeadingBylineBlocks(doc, byline);
@@ -640,32 +720,64 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
       link.remove();
     }
   });
+  const truncateAfterBlockMatch = (patterns, requiredText) => {
+    if (!doc.body) {
+      return;
+    }
+    const blocks = Array.from(doc.body.querySelectorAll("p, div, section, li, h3, h4"));
+    for (const block of blocks) {
+      const text = normalizeText(block.textContent || "");
+      if (!text) {
+        continue;
+      }
+      if (requiredText && !text.toLowerCase().includes(requiredText.toLowerCase())) {
+        continue;
+      }
+      if (!patterns.some((pattern) => pattern.test(text))) {
+        continue;
+      }
+      let node = block;
+      while (node) {
+        const next = node.nextSibling;
+        node.remove();
+        node = next;
+      }
+      break;
+    }
+  };
+  if (isWsj) {
+    truncateAfterBlockMatch([/^write to\b/i], "@wsj.com");
+    truncateAfterBlockMatch(
+      [/^videos\b/i, /^most popular/i, /^further reading/i, /^show conversation/i, /^advertisement/i],
+      null
+    );
+  }
   normalizeImages(doc, baseUrl);
   return doc.body ? doc.body.innerHTML : html;
 };
 
-const fallbackContentHtml = () => {
+const fallbackContentHtml = (doc) => {
   const node =
-    document.querySelector("article") ||
-    document.querySelector("main") ||
-    document.body ||
-    document.documentElement;
-  return node ? node.innerHTML : document.documentElement.outerHTML;
+    doc.querySelector("article") ||
+    doc.querySelector("main") ||
+    doc.body ||
+    doc.documentElement;
+  return node ? node.innerHTML : doc.documentElement.outerHTML;
 };
 
-const extractArticle = () => {
-  const section = extractSection();
-  const metaByline = extractByline();
-  const publishedAtRaw = extractPublishedAtRaw();
+const extractArticleFromDocument = (doc, baseUrl) => {
+  const section = extractSection(doc);
+  const metaByline = extractByline(doc);
+  const publishedAtRaw = extractPublishedAtRaw(doc);
   try {
-    const clone = document.cloneNode(true);
+    const clone = doc.cloneNode(true);
     const reader = new Readability(clone);
     const article = reader.parse();
     if (article && article.content) {
-      const textContent = article.textContent || document.body?.innerText || null;
+      const textContent = article.textContent || doc.body?.innerText || null;
       const byline = article.byline || metaByline;
       const normalizedByline = byline ? normalizeText(byline) : null;
-      let cleanedHtml = cleanupArticleHtml(article.content, window.location.href, {
+      let cleanedHtml = cleanupArticleHtml(article.content, baseUrl, {
         byline: normalizedByline
       });
       let cleanedTextLength = 0;
@@ -679,12 +791,12 @@ const extractArticle = () => {
         logEvent("warn", "Readability content too short, using fallback HTML", {
           cleanedTextLength
         });
-        cleanedHtml = cleanupArticleHtml(fallbackContentHtml(), window.location.href, {
+        cleanedHtml = cleanupArticleHtml(fallbackContentHtml(doc), baseUrl, {
           byline: normalizedByline
         });
       }
       return {
-        title: article.title || document.title,
+        title: article.title || doc.title,
         byline: normalizedByline,
         excerpt: article.excerpt,
         content_html: cleanedHtml,
@@ -697,21 +809,42 @@ const extractArticle = () => {
     logEvent("error", "Readability failed", { error: error.message || String(error) });
     console.warn("Readability failed", error);
   }
-  logEvent("info", "Fallback HTML used", { url: window.location.href });
+  logEvent("info", "Fallback HTML used", { url: baseUrl });
   const fallbackByline = metaByline ? normalizeText(metaByline) : null;
-  const fallbackHtml = cleanupArticleHtml(fallbackContentHtml(), window.location.href, {
+  const fallbackHtml = cleanupArticleHtml(fallbackContentHtml(doc), baseUrl, {
     byline: fallbackByline
   });
   return {
-    title: document.title,
+    title: doc.title,
     byline: fallbackByline,
     excerpt: null,
     content_html: fallbackHtml,
-    text_content: document.body?.innerText || null,
+    text_content: doc.body?.innerText || null,
     section,
     published_at_raw: publishedAtRaw
   };
 };
+
+const extractArticleWithAmp = async () => {
+  const baseUrl = window.location.href;
+  if (isWsjHost(window.location.hostname)) {
+    const ampUrl = getAmpUrl(document);
+    if (ampUrl) {
+      const ampDoc = await fetchAmpDocument(ampUrl);
+      if (ampDoc) {
+        const ampArticle = extractArticleFromDocument(ampDoc, ampUrl);
+        const textLength = normalizeText(ampArticle?.text_content || "").length;
+        if (textLength >= MIN_ARTICLE_TEXT_LENGTH) {
+          logEvent("info", "AMP extraction used", { url: ampUrl, textLength });
+          return ampArticle;
+        }
+      }
+    }
+  }
+  return extractArticleFromDocument(document, baseUrl);
+};
+
+const extractArticle = () => extractArticleFromDocument(document, window.location.href);
 
 const getArticleTextLength = () => {
   const node =
@@ -743,7 +876,7 @@ const waitForArticleContent = async (options = {}) => {
 const extractArticleWait = async (options = {}) => {
   const result = await waitForArticleContent(options);
   logEvent("info", "Article wait complete", result);
-  return extractArticle();
+  return await extractArticleWithAmp();
 };
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
