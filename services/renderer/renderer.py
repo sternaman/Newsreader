@@ -279,6 +279,19 @@ _BLOOMBERG_RELATED_MARKERS = [
 ]
 _WSJ_CONTACT_RE = re.compile(r"^write to\b.*@wsj\.com", flags=re.IGNORECASE)
 _URL_ONLY_RE = re.compile(r"^https?://\S+$", flags=re.IGNORECASE)
+_URL_ANCHOR_RE = re.compile(
+    r"<p[^>]*>\s*(?:<a[^>]*>)?https?://[^<\s]+(?:</a>)?\s*</p>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_WSJ_AUTHOR_LINK_RE = re.compile(
+    r"<a[^>]*href=\"[^\"]*/news/author/[^\"]+\"[^>]*>.*?</a>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_WSJ_BYLINE_P_RE = re.compile(
+    r"<p[^>]*class=\"[^\"]*AuthorPlaintext[^\"]*\"[^>]*>.*?</p>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
 
 
 def sanitize_html(html: str) -> str:
@@ -587,6 +600,12 @@ def _normalize_scene_breaks(content_html: str) -> str:
         flags=re.IGNORECASE,
     )
     content_html = re.sub(rf"(?:{re.escape(marker)}\s*){{2,}}", marker, content_html)
+    content_html = re.sub(
+        r"^\s*(?:<p[^>]*class=\"scene-break\"[^>]*>\\s*\\*\\s*\\*\\s*\\*\\s*</p>\s*)+",
+        "",
+        content_html,
+        flags=re.IGNORECASE,
+    )
     return content_html
 
 
@@ -910,7 +929,7 @@ def _strip_wsj_blocks(content_html: str) -> str:
 def _strip_leading_byline_blocks(content_html: str) -> str:
     if not content_html:
         return content_html
-    block_re = re.compile(r"<(p|div|section)[^>]*>.*?</\1>", flags=re.IGNORECASE | re.DOTALL)
+    block_re = re.compile(r"<(p|div|section|header)[^>]*>.*?</\1>", flags=re.IGNORECASE | re.DOTALL)
     matches = list(block_re.finditer(content_html))
     if not matches:
         return content_html
@@ -949,6 +968,31 @@ def _strip_leading_byline_blocks(content_html: str) -> str:
         last = match.end()
     output.append(content_html[last:])
     return "".join(output)
+
+
+def _strip_wsj_byline_html(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    block_re = re.compile(r"<(p|div|section|header)[^>]*>.*?</\\1>", flags=re.IGNORECASE | re.DOTALL)
+
+    def replace(match):
+        block = match.group(0)
+        if _WSJ_AUTHOR_LINK_RE.search(block) or _WSJ_BYLINE_P_RE.search(block):
+            text = _strip_tags(block).strip()
+            if len(text) <= 180:
+                return ""
+        return block
+
+    cleaned = block_re.sub(replace, content_html)
+    cleaned = _WSJ_BYLINE_P_RE.sub("", cleaned)
+    cleaned = _WSJ_AUTHOR_LINK_RE.sub("", cleaned)
+    return cleaned
+
+
+def _strip_url_anchor_paragraphs(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    return _URL_ANCHOR_RE.sub("", content_html)
 
 
 def _strip_paragraphs_by_patterns(content_html: str) -> str:
@@ -1037,12 +1081,9 @@ def _truncate_after_marker_block(
         if not text:
             continue
         normalized = re.sub(r"\\s+", " ", text).strip().lower()
-        if len(normalized) > 40:
+        if len(normalized) > 60:
             continue
-        cleaned = re.sub(r"[^a-z0-9 ]", "", normalized).strip()
-        if not cleaned:
-            continue
-        if cleaned not in marker_set:
+        if not any(marker in normalized for marker in marker_set):
             continue
         tail = content_html[match.end() :]
         link_count = len(re.findall(r"<a\b", tail, flags=re.IGNORECASE))
@@ -1138,6 +1179,31 @@ def _strip_link_heavy_blocks(
     return regex.sub(replace, content_html)
 
 
+def _strip_link_heavy_blocks_generic(
+    content_html: str,
+    *,
+    min_links: int = 6,
+    max_text_len: int = 420,
+) -> str:
+    if not content_html:
+        return content_html
+    regex = re.compile(r"<(section|div|aside|ul|ol)[^>]*>.*?</\\1>", flags=re.IGNORECASE | re.DOTALL)
+
+    def replace(match):
+        block = match.group(0)
+        text = _strip_tags(block)
+        if not text:
+            return block
+        link_count = len(re.findall(r"<a\b", block, flags=re.IGNORECASE))
+        if link_count < min_links:
+            return block
+        if len(text) <= max_text_len:
+            return ""
+        return block
+
+    return regex.sub(replace, content_html)
+
+
 def _wsj_ticker_present(text: str) -> bool:
     if not text:
         return False
@@ -1198,21 +1264,20 @@ def audit_and_heal_content(
     cleaned = content_html
     is_wsj = bool(source_domain and "wsj.com" in source_domain.lower())
     is_bloomberg = _is_bloomberg_domain(source_domain)
+    stripped = _strip_url_anchor_paragraphs(cleaned)
+    if stripped != cleaned:
+        cleaned = stripped
+        actions.append("strip_url_paragraphs")
+
     if is_wsj:
         stripped = _strip_wsj_blocks(cleaned)
         if stripped != cleaned:
             cleaned = stripped
             actions.append("strip_wsj_blocks")
-    stripped = _strip_paragraphs_by_patterns(cleaned)
-    if stripped != cleaned:
-        cleaned = stripped
-        actions.append("strip_junk_paragraphs")
-    stripped = _strip_small_blocks_by_patterns(cleaned)
-    if stripped != cleaned:
-        cleaned = stripped
-        actions.append("strip_small_blocks")
-
-    if is_wsj:
+        stripped = _strip_wsj_byline_html(cleaned)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("strip_wsj_byline_html")
         stripped = _strip_leading_byline_blocks(cleaned)
         if stripped != cleaned:
             cleaned = stripped
@@ -1229,18 +1294,22 @@ def audit_and_heal_content(
         if stripped != cleaned:
             cleaned = stripped
             actions.append("truncate_after_contact_line")
-        stripped = _truncate_after_heading(cleaned, _WSJ_RELATED_MARKERS)
+        stripped = _truncate_after_heading(cleaned, _WSJ_RELATED_MARKERS, min_links=2)
         if stripped != cleaned:
             cleaned = stripped
             actions.append("truncate_after_heading")
-        stripped = _truncate_after_marker_block(cleaned, _WSJ_RELATED_MARKERS)
+        stripped = _truncate_after_marker_block(cleaned, _WSJ_RELATED_MARKERS, min_links=2)
         if stripped != cleaned:
             cleaned = stripped
             actions.append("truncate_after_marker_block")
-        stripped = _strip_link_heavy_blocks(cleaned, _WSJ_RELATED_MARKERS)
+        stripped = _strip_link_heavy_blocks(cleaned, _WSJ_RELATED_MARKERS, min_links=4)
         if stripped != cleaned:
             cleaned = stripped
             actions.append("strip_wsj_related_blocks")
+        stripped = _strip_link_heavy_blocks_generic(cleaned, min_links=6, max_text_len=420)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("strip_wsj_link_heavy_blocks")
         stripped = _truncate_after_plain_marker(cleaned, r"\bcopyright\b", required_text="Dow Jones")
         if stripped != cleaned:
             cleaned = stripped
@@ -1259,6 +1328,15 @@ def audit_and_heal_content(
         if stripped != cleaned:
             cleaned = stripped
             actions.append("strip_bloomberg_related_blocks")
+
+    stripped = _strip_paragraphs_by_patterns(cleaned)
+    if stripped != cleaned:
+        cleaned = stripped
+        actions.append("strip_junk_paragraphs")
+    stripped = _strip_small_blocks_by_patterns(cleaned)
+    if stripped != cleaned:
+        cleaned = stripped
+        actions.append("strip_small_blocks")
 
     audit_mid = audit_content(cleaned, source_domain)
     fallback_issues = {
@@ -1350,13 +1428,17 @@ def _render_metadata(
     if reading_time:
         meta_primary.append(html.escape(reading_time, quote=True))
 
-    if url:
-        label = source_domain.strip() if source_domain else url
-        safe_label = html.escape(label, quote=True)
-        safe_url = html.escape(url.strip(), quote=True)
-        meta_secondary.append(f'Source <a href="{safe_url}">{safe_label}</a>')
-    elif source_domain:
-        meta_secondary.append(f"Source {html.escape(source_domain.strip(), quote=True)}")
+    source_label = None
+    if source_domain:
+        source_label = source_domain.strip()
+    elif url:
+        try:
+            parsed = urlparse(url)
+            source_label = parsed.netloc or url.strip()
+        except Exception:
+            source_label = url.strip()
+    if source_label:
+        meta_secondary.append(f"Source {html.escape(source_label, quote=True)}")
 
     if section and section.strip():
         meta_secondary.insert(0, f"Section {html.escape(section.strip(), quote=True)}")
