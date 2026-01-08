@@ -10,6 +10,10 @@ services:
     environment:
       - TZ=${TZ:-UTC}
       - READING_WPM=${READING_WPM:-230}
+      - KINDLE_SEND_ENABLED=${KINDLE_SEND_ENABLED:-true}
+      - KINDLE_SEND_CONFIG=${KINDLE_SEND_CONFIG:-/data/KindleConfig.json}
+      - KINDLE_SEND_TIMEOUT=${KINDLE_SEND_TIMEOUT:-120}
+      - KINDLE_SEND_ARGS=${KINDLE_SEND_ARGS:-}
     volumes:
       - data:/data
 

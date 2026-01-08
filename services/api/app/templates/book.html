@@ -11,6 +11,26 @@
   </form>
   {% if issue %}
     <p>Latest issue: {{ issue.title }} - <a href="/download/{{ issue.id }}.epub">Download EPUB</a></p>
+    {% if send_message %}
+      <p class="success">{{ send_message }}</p>
+    {% endif %}
+    {% if send_error %}
+      <p class="error">{{ send_error }}</p>
+    {% endif %}
+    {% if kindle_send.available %}
+      <form method="post" action="/issues/{{ issue.id }}/send">
+        <button type="submit">Send to Kindle</button>
+      </form>
+    {% else %}
+      {% if kindle_send.reason == "missing_config" %}
+        <p class="muted">
+          Kindle-send not configured. Run:
+          <code>docker compose exec api kindle-send --config {{ kindle_send.config_path }} send https://example.com</code>
+        </p>
+      {% elif kindle_send.reason == "missing_binary" %}
+        <p class="muted">Kindle-send binary not available in the container.</p>
+      {% endif %}
+    {% endif %}
     <div class="status">
       <p>
         Build status:

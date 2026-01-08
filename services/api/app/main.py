@@ -1,5 +1,8 @@
 import json
 import os
+import shlex
+import shutil
+import subprocess
 from datetime import datetime, date
 
 from dateutil import tz
@@ -30,6 +33,67 @@ def _now_local() -> datetime:
 
 def _issue_date() -> str:
     return _now_local().date().isoformat()
+
+
+def _kindle_send_enabled() -> bool:
+    raw = os.environ.get("KINDLE_SEND_ENABLED", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _kindle_send_bin() -> str:
+    return os.environ.get("KINDLE_SEND_BIN", "kindle-send").strip() or "kindle-send"
+
+
+def _kindle_send_config() -> str:
+    return os.environ.get("KINDLE_SEND_CONFIG", "/data/KindleConfig.json").strip()
+
+
+def _kindle_send_state() -> dict:
+    bin_path = _kindle_send_bin()
+    config_path = _kindle_send_config()
+    if not _kindle_send_enabled():
+        return {"available": False, "reason": "disabled", "bin": bin_path, "config_path": config_path}
+    if not shutil.which(bin_path):
+        return {"available": False, "reason": "missing_binary", "bin": bin_path, "config_path": config_path}
+    if not os.path.exists(config_path):
+        return {"available": False, "reason": "missing_config", "bin": bin_path, "config_path": config_path}
+    return {"available": True, "reason": None, "bin": bin_path, "config_path": config_path}
+
+
+class KindleSendError(RuntimeError):
+    pass
+
+
+def _send_epub_to_kindle(epub_path: str) -> str:
+    if not epub_path or not os.path.exists(epub_path):
+        raise KindleSendError("EPUB file not found")
+    state = _kindle_send_state()
+    if not state["available"]:
+        reason = state.get("reason") or "kindle-send unavailable"
+        raise KindleSendError(reason)
+    extra_args = os.environ.get("KINDLE_SEND_ARGS", "").strip()
+    cmd = [state["bin"], "--config", state["config_path"]]
+    if extra_args:
+        cmd.extend(shlex.split(extra_args))
+    cmd.extend(["send", epub_path])
+    try:
+        timeout = int(os.environ.get("KINDLE_SEND_TIMEOUT", "120"))
+    except ValueError:
+        timeout = 120
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise KindleSendError("kindle-send timed out") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "kindle-send failed").strip()
+        raise KindleSendError(detail[:400]) from exc
+    return (result.stdout or "").strip()
 
 
 def _parse_summary(raw: str):
@@ -291,6 +355,13 @@ async def book_detail(request: Request, book_id: int):
     issue_data = dict(issue) if issue else None
     if issue_data and issue_data.get("audit_summary"):
         issue_data["audit_summary"] = _parse_summary(issue_data["audit_summary"])
+    send_status = request.query_params.get("send")
+    send_message = None
+    send_error = None
+    if send_status == "ok":
+        send_message = "Sent to Kindle."
+    elif send_status == "error":
+        send_error = "Send to Kindle failed. Check server logs for details."
     return TEMPLATES.TemplateResponse(
         "book.html",
         {
@@ -299,6 +370,9 @@ async def book_detail(request: Request, book_id: int):
             "items": items,
             "articles": articles,
             "issue": issue_data,
+            "kindle_send": _kindle_send_state(),
+            "send_message": send_message,
+            "send_error": send_error,
         },
     )
 
@@ -307,6 +381,19 @@ async def book_detail(request: Request, book_id: int):
 async def build_issue_ui(book_id: int):
     _build_issue(book_id)
     return RedirectResponse(f"/books/{book_id}", status_code=303)
+
+
+@app.post("/issues/{issue_id}/send")
+async def send_issue_ui(issue_id: int):
+    with get_conn() as conn:
+        issue = conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    try:
+        _send_epub_to_kindle(issue["epub_path"])
+        return RedirectResponse(f"/books/{issue['book_id']}?send=ok", status_code=303)
+    except KindleSendError:
+        return RedirectResponse(f"/books/{issue['book_id']}?send=error", status_code=303)
 
 
 @app.post("/books/{book_id}/articles/clear")
@@ -490,3 +577,16 @@ async def list_issues():
             "SELECT issues.*, books.name AS book_name FROM issues JOIN books ON books.id = issues.book_id ORDER BY issue_date DESC"
         ).fetchall()
     return {"issues": [dict(row) for row in issues]}
+
+
+@app.post("/api/issues/{issue_id}/send")
+async def send_issue_api(issue_id: int):
+    with get_conn() as conn:
+        issue = conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    try:
+        output = _send_epub_to_kindle(issue["epub_path"])
+    except KindleSendError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "message": output or "sent"}

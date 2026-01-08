@@ -119,3 +119,8 @@ button {
   color: #a00;
   font-weight: 600;
 }
+
+.success {
+  color: #1f5f1f;
+  font-weight: 600;
+}
