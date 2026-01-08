@@ -6,9 +6,28 @@
   <form method="post" action="/books/{{ book.id }}/build">
     <button type="submit">Build Today's Issue</button>
   </form>
+  {% set source = (book.source_url or "")|lower %}
+  {% if "bloomberg" in source %}
+    {% set import_mode = "businessweek" if "businessweek" in source else "bloomberg" %}
+    <form method="post" action="/books/{{ book.id }}/import/bloomberg">
+      <input type="hidden" name="mode" value="{{ import_mode }}">
+      <input type="hidden" name="days" value="1.2">
+      <input type="hidden" name="max_articles" value="40">
+      <input type="hidden" name="max_sections" value="6">
+      <button type="submit">
+        Import {{ "Businessweek" if import_mode == "businessweek" else "Bloomberg" }} (Calibre)
+      </button>
+    </form>
+  {% endif %}
   <form method="post" action="/books/{{ book.id }}/articles/clear" onsubmit="return confirm('Clear captured articles and issues for this book?');">
     <button type="submit">Clear Captured Articles</button>
   </form>
+  {% if import_message %}
+    <p class="success">{{ import_message }}</p>
+  {% endif %}
+  {% if import_error %}
+    <p class="error">{{ import_error }}</p>
+  {% endif %}
   {% if issue %}
     <p>Latest issue: {{ issue.title }} - <a href="/download/{{ issue.id }}.epub">Download EPUB</a></p>
     {% if send_message %}

@@ -1,16 +1,19 @@
 import html
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 from datetime import datetime, date, timedelta
+from urllib.parse import urlparse
 
 from dateutil import tz
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+import requests
 
 from app.db import get_conn, init_db
 from renderer import audit_and_heal_content, build_issue_epub, derive_byline_from_text, sanitize_html
@@ -462,6 +465,297 @@ def _book_or_404(book_id: int):
     return row
 
 
+def _ingest_article_payload(book_id: int, payload: dict) -> dict:
+    url = payload.get("url")
+    title = payload.get("title")
+    content_html = payload.get("content_html")
+    if not url or not title or not content_html:
+        raise ValueError("Missing url/title/content_html")
+    content_hash = compute_content_hash(url, content_html)
+    now = _now_local().isoformat()
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT * FROM articles WHERE book_id = ? AND url = ? AND content_hash = ?",
+            (book_id, url, content_hash),
+        ).fetchone()
+        if existing:
+            return {"status": "duplicate", "article_id": existing["id"]}
+        conn.execute(
+            "INSERT INTO articles (book_id, url, title, byline, excerpt, content_html, source_domain, published_at_raw, text_content, section, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                book_id,
+                url,
+                title,
+                payload.get("byline"),
+                payload.get("excerpt"),
+                content_html,
+                payload.get("source_domain"),
+                payload.get("published_at_raw"),
+                payload.get("text_content"),
+                payload.get("section"),
+                content_hash,
+                now,
+            ),
+        )
+        article_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+    debug_payload = dict(payload)
+    debug_payload.update(
+        {
+            "book_id": book_id,
+            "article_id": article_id,
+            "received_at": now,
+        }
+    )
+    try:
+        with open(os.path.join(DEBUG_ARTICLES_DIR, f"article_{article_id}.json"), "w", encoding="utf-8") as handle:
+            json.dump(debug_payload, handle, ensure_ascii=True, indent=2)
+    except OSError:
+        pass
+    return {"status": "ok", "article_id": article_id}
+
+
+_BLOOMBERG_API = "https://cdn-mobapi.bloomberg.com"
+_BLOOMBERG_UA = "Mozilla/5.0 (Newsreader; Bloomberg recipe import)"
+
+
+def _bloomberg_get_json(url: str) -> dict:
+    resp = requests.get(
+        url,
+        headers={"User-Agent": _BLOOMBERG_UA, "Accept": "application/json"},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _normalize_bloomberg_html(content_html: str) -> str:
+    if not content_html:
+        return ""
+    html_out = re.sub(
+        r"(<img[^>]*?)src=[\"']\s*[\"'][^>]*?data-native-src=[\"']([^\"']+)[\"']",
+        r"\1src=\"\2\"",
+        content_html,
+        flags=re.IGNORECASE,
+    )
+    html_out = re.sub(
+        r"(<img[^>]*?)\sdata-native-src=[\"']([^\"']+)[\"']",
+        r"\1 src=\"\2\"",
+        html_out,
+        flags=re.IGNORECASE,
+    )
+    html_out = re.sub(r"\sdata-native-src=[\"'][^\"']+[\"']", "", html_out, flags=re.IGNORECASE)
+    html_out = re.sub(
+        r"(-1x-1)(\.(?:jpg|png))",
+        r"750x-1\2",
+        html_out,
+        flags=re.IGNORECASE,
+    )
+    return html_out
+
+
+def _bloomberg_text_content(content_html: str) -> str:
+    if not content_html:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", content_html)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _epoch_to_iso(value) -> str | None:
+    if value is None:
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if num > 1_000_000_000_000:
+        num = num / 1000.0
+    try:
+        dt = datetime.fromtimestamp(num, tz=_now_local().tzinfo)
+    except (OSError, ValueError):
+        return None
+    return dt.isoformat()
+
+
+def _bloomberg_story_detail(story_id: str) -> tuple[dict, str]:
+    detail = _bloomberg_get_json(f"{_BLOOMBERG_API}/wssmobile/v1/stories/{story_id}")
+    body_data = _bloomberg_get_json(f"{_BLOOMBERG_API}/wssmobile/v1/bw/news/stories/{story_id}")
+    body_html = body_data.get("html") or ""
+    return detail, body_html
+
+
+def _bloomberg_collect_stories(*, days: float, max_articles: int | None, max_sections: int | None) -> list[dict]:
+    nav = _bloomberg_get_json(f"{_BLOOMBERG_API}/wssmobile/v1/navigation/bloomberg_app/search-v2")
+    sections = nav.get("searchNav") or []
+    cutoff = _now_local().replace(tzinfo=None) - timedelta(days=days)
+    stories: list[dict] = []
+    seen: set[str] = set()
+    section_count = 0
+    for group in sections:
+        for item in group.get("items") or []:
+            if max_sections and section_count >= max_sections:
+                return stories
+            section_count += 1
+            section_title = item.get("title") or "Bloomberg"
+            href = (item.get("links") or {}).get("self", {}).get("href")
+            if not href:
+                continue
+            sec_data = _bloomberg_get_json(f"{_BLOOMBERG_API}{href}")
+            for module in sec_data.get("modules") or []:
+                for story in module.get("stories") or []:
+                    if story.get("type") not in {"article", "interactive"}:
+                        continue
+                    story_id = story.get("internalID") or story.get("id")
+                    if not story_id or story_id in seen:
+                        continue
+                    published = story.get("published")
+                    if published:
+                        try:
+                            published_val = float(published)
+                            if published_val > 1_000_000_000_000:
+                                published_val = published_val / 1000.0
+                            published_dt = datetime.fromtimestamp(published_val)
+                            if published_dt < cutoff:
+                                continue
+                        except (TypeError, ValueError, OSError):
+                            pass
+                    seen.add(str(story_id))
+                    stories.append(
+                        {
+                            "id": str(story_id),
+                            "title": story.get("title"),
+                            "section": section_title,
+                            "summary": story.get("autoGeneratedSummary"),
+                        }
+                    )
+                    if max_articles and len(stories) >= max_articles:
+                        return stories
+    return stories
+
+
+def _bloomberg_collect_businessweek(*, issue_id: str | None, max_articles: int | None) -> list[dict]:
+    listing = _bloomberg_get_json(f"{_BLOOMBERG_API}/wssmobile/v1/bw/news/list?limit=1")
+    magazines = listing.get("magazines") or []
+    edition_id = issue_id or (magazines[0]["id"] if magazines else None)
+    if not edition_id:
+        return []
+    week = _bloomberg_get_json(f"{_BLOOMBERG_API}/wssmobile/v1/bw/news/week/{edition_id}")
+    stories: list[dict] = []
+    for module in week.get("modules") or []:
+        section_title = module.get("title") or "Businessweek"
+        for article in module.get("articles") or []:
+            story_id = article.get("id")
+            if not story_id:
+                continue
+            stories.append(
+                {
+                    "id": str(story_id),
+                    "title": article.get("title"),
+                    "section": section_title,
+                    "summary": None,
+                }
+            )
+            if max_articles and len(stories) >= max_articles:
+                return stories
+    return stories
+
+
+def _bloomberg_payload_for_story(story: dict) -> dict | None:
+    detail, body_html = _bloomberg_story_detail(story["id"])
+    long_url = detail.get("longURL") or detail.get("url") or detail.get("mobileURL")
+    if not long_url:
+        return None
+    body_html = _normalize_bloomberg_html(body_html)
+    if detail.get("type") == "interactive":
+        body_html = "<p><em>This interactive article is best read in a browser.</em></p>" + body_html
+    lede = detail.get("ledeImage") or {}
+    lede_url = (lede.get("imageURLs") or {}).get("default")
+    if lede_url and lede_url.split("?")[0] not in body_html:
+        caption = lede.get("caption") or ""
+        credit = lede.get("credit") or ""
+        caption_html = ""
+        if caption or credit:
+            caption_text = " ".join(x for x in [caption, credit] if x)
+            caption_html = f"<figcaption>{html.escape(caption_text, quote=True)}</figcaption>"
+        body_html = f"<figure><img src=\"{lede_url}\"/>{caption_html}</figure>{body_html}"
+    excerpt = None
+    abstract = detail.get("abstract")
+    if isinstance(abstract, list) and abstract:
+        excerpt = " ".join(abstract)
+    if not excerpt:
+        excerpt = detail.get("summary") or story.get("summary")
+    published_at_raw = _epoch_to_iso(detail.get("updatedAt") or detail.get("publishedAt") or detail.get("published"))
+    section = detail.get("primaryCategory") or story.get("section")
+    source_domain = urlparse(long_url).netloc or "bloomberg.com"
+    text_content = _bloomberg_text_content(body_html)
+    return {
+        "url": long_url,
+        "title": detail.get("title") or story.get("title") or long_url,
+        "byline": detail.get("byline"),
+        "excerpt": excerpt,
+        "content_html": body_html,
+        "source_domain": source_domain,
+        "published_at_raw": published_at_raw,
+        "text_content": text_content,
+        "section": section,
+    }
+
+
+def _save_book_items(book_id: int, items: list[dict]) -> None:
+    now = _now_local().isoformat()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM book_items WHERE book_id = ?", (book_id,))
+        for item in items:
+            conn.execute(
+                "INSERT INTO book_items (book_id, title, url, ts, created_at) VALUES (?, ?, ?, ?, ?)",
+                (book_id, item.get("title"), item.get("url"), item.get("ts"), now),
+            )
+
+
+def _import_bloomberg(
+    *,
+    book_id: int,
+    mode: str,
+    days: float,
+    max_articles: int | None,
+    max_sections: int | None,
+    issue_id: str | None,
+    update_snapshot: bool,
+) -> dict:
+    if mode not in {"bloomberg", "businessweek"}:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+    if mode == "businessweek":
+        stories = _bloomberg_collect_businessweek(issue_id=issue_id, max_articles=max_articles)
+    else:
+        stories = _bloomberg_collect_stories(days=days, max_articles=max_articles, max_sections=max_sections)
+    snapshot_items = []
+    results = {"ok": 0, "duplicate": 0, "error": 0, "errors": []}
+    for item in stories:
+        try:
+            payload = _bloomberg_payload_for_story(item)
+            if not payload:
+                results["error"] += 1
+                results["errors"].append({"id": item.get("id"), "error": "missing payload"})
+                continue
+            snapshot_items.append({"title": payload.get("title"), "url": payload.get("url")})
+            inserted = _ingest_article_payload(book_id, payload)
+            results[inserted["status"]] += 1
+        except Exception as exc:
+            results["error"] += 1
+            results["errors"].append({"id": item.get("id"), "error": str(exc)[:200]})
+    if update_snapshot:
+        snapshot_items = [item for item in snapshot_items if item.get("title") and item.get("url")]
+        _save_book_items(book_id, snapshot_items)
+    return {
+        "status": "ok",
+        "mode": mode,
+        "fetched": len(stories),
+        "ingested": results["ok"],
+        "duplicates": results["duplicate"],
+        "errors": results["error"],
+        "error_details": results["errors"][:10],
+    }
+
+
 def _current_issue(book_id: int):
     issue_date = _issue_date()
     with get_conn() as conn:
@@ -691,6 +985,13 @@ async def book_detail(request: Request, book_id: int):
         send_message = "Sent to Kindle."
     elif send_status == "error":
         send_error = "Send to Kindle failed. Check server logs for details."
+    import_status = request.query_params.get("import")
+    import_message = None
+    import_error = None
+    if import_status == "ok":
+        import_message = "Bloomberg import complete."
+    elif import_status == "error":
+        import_error = "Bloomberg import failed. Check server logs for details."
     return TEMPLATES.TemplateResponse(
         "book.html",
         {
@@ -702,6 +1003,8 @@ async def book_detail(request: Request, book_id: int):
             "kindle_send": _kindle_send_state(),
             "send_message": send_message,
             "send_error": send_error,
+            "import_message": import_message,
+            "import_error": import_error,
         },
     )
 
@@ -747,6 +1050,43 @@ async def clear_articles_ui(book_id: int):
             except OSError:
                 pass
     return RedirectResponse(f"/books/{book_id}", status_code=303)
+
+
+@app.post("/books/{book_id}/import/bloomberg")
+async def import_bloomberg_ui(request: Request, book_id: int):
+    _book_or_404(book_id)
+    form = await request.form()
+    mode = (form.get("mode") or "bloomberg").strip().lower()
+    issue_id = form.get("issue_id") or None
+    try:
+        days = float(form.get("days") or 1.2)
+    except (TypeError, ValueError):
+        days = 1.2
+    try:
+        max_articles = int(form.get("max_articles") or 40)
+        if max_articles <= 0:
+            max_articles = None
+    except (TypeError, ValueError):
+        max_articles = 40
+    try:
+        max_sections = int(form.get("max_sections") or 6)
+        if max_sections <= 0:
+            max_sections = None
+    except (TypeError, ValueError):
+        max_sections = 6
+    try:
+        _import_bloomberg(
+            book_id=book_id,
+            mode=mode,
+            days=days,
+            max_articles=max_articles,
+            max_sections=max_sections,
+            issue_id=issue_id,
+            update_snapshot=True,
+        )
+        return RedirectResponse(f"/books/{book_id}?import=ok", status_code=303)
+    except Exception:
+        return RedirectResponse(f"/books/{book_id}?import=error", status_code=303)
 
 
 @app.get("/issues", response_class=HTMLResponse)
@@ -818,52 +1158,47 @@ async def list_items(book_id: int):
 @app.post("/api/books/{book_id}/articles/ingest")
 async def ingest_article(book_id: int, payload: dict):
     _book_or_404(book_id)
-    url = payload.get("url")
-    title = payload.get("title")
-    content_html = payload.get("content_html")
-    if not url or not title or not content_html:
-        raise HTTPException(status_code=400, detail="Missing url/title/content_html")
-    content_hash = compute_content_hash(url, content_html)
-    now = _now_local().isoformat()
-    with get_conn() as conn:
-        existing = conn.execute(
-            "SELECT * FROM articles WHERE book_id = ? AND url = ? AND content_hash = ?",
-            (book_id, url, content_hash),
-        ).fetchone()
-        if existing:
-            return {"status": "duplicate", "article_id": existing["id"]}
-        conn.execute(
-            "INSERT INTO articles (book_id, url, title, byline, excerpt, content_html, source_domain, published_at_raw, text_content, section, content_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                book_id,
-                url,
-                title,
-                payload.get("byline"),
-                payload.get("excerpt"),
-                content_html,
-                payload.get("source_domain"),
-                payload.get("published_at_raw"),
-                payload.get("text_content"),
-                payload.get("section"),
-                content_hash,
-                now,
-            ),
-        )
-        article_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
-    debug_payload = dict(payload)
-    debug_payload.update(
-        {
-            "book_id": book_id,
-            "article_id": article_id,
-            "received_at": now,
-        }
-    )
     try:
-        with open(os.path.join(DEBUG_ARTICLES_DIR, f"article_{article_id}.json"), "w", encoding="utf-8") as handle:
-            json.dump(debug_payload, handle, ensure_ascii=True, indent=2)
-    except OSError:
-        pass
-    return {"status": "ok", "article_id": article_id}
+        return _ingest_article_payload(book_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/books/{book_id}/import/bloomberg")
+async def import_bloomberg_api(book_id: int, payload: dict):
+    _book_or_404(book_id)
+    mode = (payload.get("mode") or "bloomberg").strip().lower()
+    issue_id = payload.get("issue_id") or None
+    try:
+        days = float(payload.get("days", 1.2))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid days")
+    max_articles = payload.get("max_articles")
+    max_sections = payload.get("max_sections")
+    try:
+        if max_articles is not None:
+            max_articles = int(max_articles)
+            if max_articles <= 0:
+                max_articles = None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid max_articles")
+    try:
+        if max_sections is not None:
+            max_sections = int(max_sections)
+            if max_sections <= 0:
+                max_sections = None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid max_sections")
+    update_snapshot = payload.get("update_snapshot", True)
+    return _import_bloomberg(
+        book_id=book_id,
+        mode=mode,
+        days=days,
+        max_articles=max_articles,
+        max_sections=max_sections,
+        issue_id=issue_id,
+        update_snapshot=bool(update_snapshot),
+    )
 
 
 @app.post("/api/books/{book_id}/issue/build")

@@ -74,6 +74,29 @@ Firefox MV3 note:
 
 The issue EPUB is generated per Book per calendar day and updated with new chapters when new articles arrive (deduped by URL + content hash).
 
+## Bloomberg Import (Calibre Recipe)
+
+This uses the same Bloomberg mobile API endpoints as the built-in Calibre recipes. It runs on the host (no browser session) and is always user-triggered.
+
+UI:
+- If your Book source URL contains `bloomberg` or `businessweek`, use **Import Bloomberg (Calibre)** on the Book page.
+
+API:
+```bash
+curl -X POST http://localhost:8000/api/books/1/import/bloomberg \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"bloomberg","days":1.2,"max_articles":40,"max_sections":6}'
+```
+
+Businessweek edition (optional):
+```bash
+curl -X POST http://localhost:8000/api/books/1/import/bloomberg \
+  -H "Content-Type: application/json" \
+  -d '{"mode":"businessweek","issue_id":"24_17","max_articles":60}'
+```
+
+After import, build the issue as usual.
+
 ## Download Issue EPUB
 
 - From the Book page, click the **Download EPUB** link.
