@@ -258,22 +258,59 @@ def _data_url_from_bytes(content: bytes, content_type: str) -> str:
     return f"data:{content_type};base64,{encoded}"
 
 
-def _maybe_convert_webp(content: bytes, content_type: str) -> tuple:
-    if content_type.lower() != "image/webp":
-        return content, content_type
+def _image_max_dim() -> int:
+    raw = os.environ.get("IMAGE_MAX_DIM", "1400").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1400
+    return max(400, min(3000, value))
+
+
+def _image_jpeg_quality() -> int:
+    raw = os.environ.get("IMAGE_JPEG_QUALITY", "82").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 82
+    return max(50, min(95, value))
+
+
+def _process_image(content: bytes, content_type: str) -> tuple:
     try:
         from PIL import Image
     except ImportError:
         return content, content_type
     try:
         image = Image.open(io.BytesIO(content))
-        if image.mode not in ("RGB", "L"):
-            image = image.convert("RGB")
-        out = io.BytesIO()
-        image.save(out, format="JPEG", quality=85, optimize=True)
-        return out.getvalue(), "image/jpeg"
+        max_dim = _image_max_dim()
+        if max_dim:
+            width, height = image.size
+            if max(width, height) > max_dim:
+                scale = max_dim / max(width, height)
+                new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+                image = image.resize(new_size, Image.LANCZOS)
+
+        normalized_type = content_type.lower()
+        if normalized_type in ("image/webp", "image/jpeg", "image/jpg"):
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            out = io.BytesIO()
+            image.save(
+                out,
+                format="JPEG",
+                quality=_image_jpeg_quality(),
+                optimize=True,
+                progressive=True,
+            )
+            return out.getvalue(), "image/jpeg"
+        if normalized_type == "image/png":
+            out = io.BytesIO()
+            image.save(out, format="PNG", optimize=True)
+            return out.getvalue(), "image/png"
     except Exception:
         return content, content_type
+    return content, content_type
 
 
 def embed_images(
@@ -362,7 +399,7 @@ def embed_images(
             raw = read_response_bytes(response)
             if not raw:
                 return match.group(0)
-            raw, content_type = _maybe_convert_webp(raw, content_type)
+            raw, content_type = _process_image(raw, content_type)
             data_url = _data_url_from_bytes(raw, content_type)
             return match.group(0).replace(src, data_url)
         except Exception:
@@ -403,7 +440,7 @@ def _extract_data_images(
             raw = base64.b64decode(b64_data)
         except Exception:
             return match.group(0)
-        raw, mime = _maybe_convert_webp(raw, mime)
+        raw, mime = _process_image(raw, mime)
         digest = hashlib.sha256(raw).hexdigest()
         ext = _DATA_IMAGE_EXTS.get(mime)
         if not ext:

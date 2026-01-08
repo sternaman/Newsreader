@@ -14,6 +14,8 @@ services:
       - KINDLE_SEND_CONFIG=${KINDLE_SEND_CONFIG:-/data/KindleConfig.json}
       - KINDLE_SEND_TIMEOUT=${KINDLE_SEND_TIMEOUT:-120}
       - KINDLE_SEND_ARGS=${KINDLE_SEND_ARGS:-}
+      - IMAGE_MAX_DIM=${IMAGE_MAX_DIM:-1400}
+      - IMAGE_JPEG_QUALITY=${IMAGE_JPEG_QUALITY:-82}
     volumes:
       - data:/data
 
