@@ -54,44 +54,57 @@ ALLOWED_ATTRS = {
 EINK_CSS = """
 body {
   font-family: "Georgia", "Times New Roman", serif;
-  font-size: 1.1em;
-  line-height: 1.5;
+  font-size: 1.05em;
+  line-height: 1.55;
   margin: 0;
   padding: 0;
 }
-article { padding: 1em 1.4em; }
-h1, h2, h3 { font-weight: bold; margin: 1em 0 0.5em; }
+article { padding: 0.9em 1.2em; }
+h1, h2, h3 {
+  font-weight: bold;
+  line-height: 1.2;
+  margin: 0.9em 0 0.4em;
+}
+h1 { font-size: 1.6em; }
+h2 { font-size: 1.3em; }
+h3 { font-size: 1.15em; }
+p { margin: 0 0 0.9em; }
 img {
-  max-width: 92%;
+  max-width: 85%;
   width: auto;
   height: auto;
-  max-height: 55vh;
+  max-height: 48vh;
   object-fit: contain;
   display: block;
-  margin: 0.8em auto;
+  margin: 0.7em auto;
   page-break-inside: avoid;
 }
 div.meta {
-  margin: 0.2em 0 1em;
-  padding-bottom: 0.6em;
+  margin: 0.3em 0 0.9em;
+  padding-bottom: 0.5em;
   border-bottom: 1px solid #ccc;
   color: #444;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
-div.meta-line { margin: 0.2em 0; }
-p.meta-excerpt { margin: 0.4em 0 0; font-style: italic; color: #555; }
-p.scene-break { text-align: center; letter-spacing: 0.2em; margin: 1em 0; }
+div.meta-line { margin: 0.15em 0; }
+p.meta-excerpt { margin: 0.35em 0 0; font-style: italic; color: #555; }
+p.scene-break { text-align: center; letter-spacing: 0.2em; margin: 0.8em 0; }
 figure {
-  margin: 0.8em 0;
+  margin: 0.7em 0 0.9em;
   break-inside: avoid;
   page-break-inside: avoid;
 }
 figcaption {
-  font-size: 0.85em;
+  font-size: 0.8em;
   text-align: center;
   color: #555;
 }
-blockquote { border-left: 3px solid #999; padding-left: 0.8em; color: #333; }
+blockquote {
+  border-left: 3px solid #999;
+  padding-left: 0.8em;
+  color: #333;
+  margin: 0.6em 0 0.9em;
+}
 """
 
 
