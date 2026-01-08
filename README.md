@@ -56,7 +56,8 @@ Firefox MV3 note:
 1. Open the article you want to capture.
 2. Click **Send Article** in the extension control panel.
    - Readability-based extraction is used; if it fails, the full HTML is sent.
-   - Images are inlined as data URLs when possible to preserve charts behind logins.
+   - Images are inlined as data URLs to preserve charts behind logins (can be slower for image-heavy pages).
+   - WSJ/Bloomberg inline the lead image plus chart-like images; other sites inline all images.
    - Byline, published time, section, and reading time are shown when available.
    - Firefox-only: the mobile UA toggle captures a mobile-rendered copy of WSJ in a background tab.
 
@@ -111,11 +112,19 @@ Embedded images are resized and compressed to keep EPUB sizes reasonable.
 
 - `IMAGE_MAX_DIM` (default `1400`): max width/height in pixels
 - `IMAGE_JPEG_QUALITY` (default `82`): JPEG re-encode quality (50-95)
+- `IMAGE_FETCH_MAX_BYTES` (default `8388608`): per-image download cap (0 = no limit)
+
+## Retention (optional)
+
+Issues and unreferenced articles older than the retention window are pruned on startup and after issue builds.
+
+- `RETENTION_DAYS` (default `3`): keep the last N days (0 = keep everything)
 
 ## Crosspoint-reader Notes
 
 - Copy the downloaded EPUB to the device storage/SD card, or use OPDS.
-- OPDS feed: `http://<host>:8000/opds` (set **Calibre Web URL** on the device to `http://<host>:8000`).
+- OPDS root: `http://<host>:8000/opds` (set **Calibre Web URL** on the device to `http://<host>:8000`).
+- OPDS sections: `/opds/today`, `/opds/all`, `/opds/books/{book_id}` (includes covers/thumbnails).
 - On the X4 home screen, open **Calibre Library** to browse and download issues.
 - Current firmware does not render embedded images; validate images on PC/Kindle for now.
 

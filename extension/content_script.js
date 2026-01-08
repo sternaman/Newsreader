@@ -1,5 +1,6 @@
 const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const logEvent = () => {};
 const MIN_ARTICLE_TEXT_LENGTH = 200;
 const MAX_IMAGE_WIDTH = 600;
 const WSJ_MARKET_TOKENS = new Set([
@@ -25,8 +26,26 @@ const WSJ_MENU_INDICATORS = [
   "Puzzles",
   "More"
 ];
+const BLOOMBERG_MENU_INDICATORS = [
+  "Bloomberg",
+  "Markets",
+  "Technology",
+  "Politics",
+  "Businessweek",
+  "Wealth",
+  "Pursuits",
+  "Opinion",
+  "Green",
+  "Industries",
+  "Economics"
+];
 
 const isWsjHost = (hostname) => hostname === "wsj.com" || hostname.endsWith(".wsj.com");
+const isBloombergHost = (hostname) =>
+  hostname === "bloomberg.com" ||
+  hostname.endsWith(".bloomberg.com") ||
+  hostname === "businessweek.com" ||
+  hostname.endsWith(".businessweek.com");
 
 const isLikelyWsjArticleUrl = (url) => {
   if (!isWsjHost(url.hostname)) {
@@ -534,6 +553,26 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
     /navigating the markets/i,
     /^write to\b/i
   ];
+  const bloombergJunkPatterns = [
+    /^bloomberg$/i,
+    /^bloomberg businessweek$/i,
+    /^bloomberg news$/i,
+    /^businessweek$/i,
+    /^most read$/i,
+    /^most popular$/i,
+    /^related stories$/i,
+    /^more from bloomberg$/i,
+    /^more from businessweek$/i,
+    /^recommended/i,
+    /^read more$/i,
+    /^read next$/i,
+    /^continue reading$/i,
+    /^sign up/i,
+    /^subscribe/i,
+    /^newsletter/i,
+    /^get the/i,
+    /bloomberg l\.p\./i
+  ];
   const selectors = [
     "nav",
     "footer",
@@ -569,11 +608,21 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
     "[id*='footer']",
     "[id*='nav']"
   ];
+  const bloombergSelectors = [
+    "[data-tracking-type*='related']",
+    "[data-tracking-type*='recommend']",
+    "[data-tracking-type*='newsletter']",
+    "[data-component*='ad']"
+  ];
   let isWsj = false;
+  let isBloomberg = false;
   try {
-    isWsj = isWsjHost(new URL(baseUrl).hostname);
+    const hostname = new URL(baseUrl).hostname;
+    isWsj = isWsjHost(hostname);
+    isBloomberg = isBloombergHost(hostname);
   } catch (error) {
     isWsj = false;
+    isBloomberg = false;
   }
   const isMarketValue = (text) =>
     /^[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?%?$/.test(text) || /^\d+\/\d+$/.test(text);
@@ -594,7 +643,21 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
     }
     return false;
   };
-  doc.querySelectorAll(selectors.join(",")).forEach((el) => el.remove());
+  const hasBloombergMenuIndicators = (text) => {
+    let hits = 0;
+    for (const token of BLOOMBERG_MENU_INDICATORS) {
+      if (text.includes(token)) {
+        hits += 1;
+      }
+      if (hits >= 5) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const activeSelectors = isBloomberg ? selectors.concat(bloombergSelectors) : selectors;
+  const activeJunkPatterns = isBloomberg ? junkPatterns.concat(bloombergJunkPatterns) : junkPatterns;
+  doc.querySelectorAll(activeSelectors.join(",")).forEach((el) => el.remove());
   doc.querySelectorAll("header").forEach((el) => {
     const text = normalizeText(el.textContent || "");
     const linkCount = el.querySelectorAll("a").length;
@@ -624,6 +687,12 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
         return;
       }
     }
+    if (isBloomberg) {
+      if (hasBloombergMenuIndicators(text)) {
+        el.remove();
+        return;
+      }
+    }
     if (cssTextPatterns.some((pattern) => pattern.test(text))) {
       el.remove();
       return;
@@ -631,7 +700,7 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
     if (text.length > MAX_JUNK_LENGTH) {
       return;
     }
-    for (const pattern of junkPatterns) {
+    for (const pattern of activeJunkPatterns) {
       if (pattern.test(text)) {
         el.remove();
         break;
@@ -711,6 +780,12 @@ const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) 
       null
     );
   }
+  if (isBloomberg) {
+    truncateAfterBlockMatch(
+      [/^most read/i, /^most popular/i, /^related stories/i, /^more from/i, /^recommended/i],
+      null
+    );
+  }
   normalizeImages(doc, baseUrl);
   return doc.body ? doc.body.innerHTML : html;
 };
@@ -781,7 +856,13 @@ const extractArticleFromDocument = (doc, baseUrl) => {
 
 const extractArticleWithAmp = async () => {
   const baseUrl = window.location.href;
-  if (isWsjHost(window.location.hostname)) {
+  let hostname = "";
+  try {
+    hostname = new URL(baseUrl).hostname;
+  } catch (error) {
+    hostname = "";
+  }
+  if (hostname && (isWsjHost(hostname) || isBloombergHost(hostname))) {
     const ampUrl = getAmpUrl(document);
     if (ampUrl) {
       const ampDoc = await fetchAmpDocument(ampUrl);
@@ -789,6 +870,7 @@ const extractArticleWithAmp = async () => {
         const ampArticle = extractArticleFromDocument(ampDoc, ampUrl);
         const textLength = normalizeText(ampArticle?.text_content || "").length;
         if (textLength >= MIN_ARTICLE_TEXT_LENGTH) {
+          logEvent("info", "AMP extraction used", { url: ampUrl, textLength });
           return ampArticle;
         }
       }

@@ -1,7 +1,9 @@
 const DEFAULT_MAX_ITEMS = 20;
 const DEFAULT_THROTTLE_MS = 1500;
-const IMAGE_INLINE_MAX_COUNT = 15;
-const IMAGE_INLINE_MAX_BYTES = 2 * 1024 * 1024;
+const IMAGE_INLINE_MAX_COUNT = 0;
+const IMAGE_INLINE_MAX_BYTES = 0;
+const INLINE_LEAD_MAX = 6;
+const CHART_HINT_RE = /(chart|graph|infographic|data|plot|table|map)/i;
 const IMAGE_INLINE_TIMEOUT_MS = 15000;
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1";
@@ -175,6 +177,13 @@ const postJson = async (url, payload) => {
   return response.json();
 };
 
+const isWsjHost = (hostname) => hostname === "wsj.com" || hostname.endsWith(".wsj.com");
+const isBloombergHost = (hostname) =>
+  hostname === "bloomberg.com" ||
+  hostname.endsWith(".bloomberg.com") ||
+  hostname === "businessweek.com" ||
+  hostname.endsWith(".businessweek.com");
+
 const blobToDataUrl = (blob) =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -183,15 +192,96 @@ const blobToDataUrl = (blob) =>
     reader.readAsDataURL(blob);
   });
 
+const getInlinePolicy = (baseUrl) => {
+  try {
+    const hostname = new URL(baseUrl).hostname;
+    if (isWsjHost(hostname) || isBloombergHost(hostname)) {
+      return "lead+charts";
+    }
+  } catch (error) {
+    // ignore
+  }
+  return "all";
+};
+
+const isPlaceholderImage = (src) => {
+  if (!src) {
+    return true;
+  }
+  const lowered = src.toLowerCase();
+  if (lowered.startsWith("data:") && lowered.length < 200) {
+    return true;
+  }
+  if (lowered.startsWith("blob:")) {
+    return true;
+  }
+  return /pixel|spacer|transparent|1x1/.test(lowered);
+};
+
+const isChartImage = (img) => {
+  const haystack = [
+    img.getAttribute("alt"),
+    img.getAttribute("src"),
+    img.getAttribute("data-src"),
+    img.className,
+    img.id
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return CHART_HINT_RE.test(haystack);
+};
+
+const selectImagesForInlining = (doc, policy) => {
+  const images = Array.from(doc.querySelectorAll("img"));
+  if (policy === "all") {
+    return images;
+  }
+  const usable = images.filter((img) => !isPlaceholderImage(img.getAttribute("src") || img.src || ""));
+  let lead =
+    doc.querySelector("figure img") ||
+    doc.querySelector("picture img") ||
+    usable[0] ||
+    images[0] ||
+    null;
+  const selected = [];
+  if (lead && !isPlaceholderImage(lead.getAttribute("src") || lead.src || "")) {
+    selected.push(lead);
+  }
+  for (const img of usable) {
+    if (selected.includes(img)) {
+      continue;
+    }
+    if (isChartImage(img)) {
+      selected.push(img);
+    }
+    if (selected.length >= INLINE_LEAD_MAX) {
+      break;
+    }
+  }
+  return selected;
+};
+
 const inlineImages = async (html, baseUrl) => {
   if (typeof DOMParser === "undefined") {
     return html;
   }
   const doc = new DOMParser().parseFromString(html, "text/html");
+  const policy = getInlinePolicy(baseUrl);
   const images = Array.from(doc.querySelectorAll("img"));
+  const selected = selectImagesForInlining(doc, policy);
+  const selectedSet = new Set(selected);
+  if (policy !== "all") {
+    images.forEach((img) => {
+      if (!selectedSet.has(img)) {
+        img.remove();
+      }
+    });
+  }
   let count = 0;
-  for (const img of images) {
-    if (count >= IMAGE_INLINE_MAX_COUNT) {
+  const maxCount = policy === "lead+charts" ? INLINE_LEAD_MAX : IMAGE_INLINE_MAX_COUNT;
+  for (const img of selected) {
+    if (maxCount > 0 && count >= maxCount) {
       break;
     }
     const src = img.getAttribute("src");
@@ -213,7 +303,7 @@ const inlineImages = async (html, baseUrl) => {
         continue;
       }
       const blob = await response.blob();
-      if (blob.size > IMAGE_INLINE_MAX_BYTES) {
+      if (IMAGE_INLINE_MAX_BYTES > 0 && blob.size > IMAGE_INLINE_MAX_BYTES) {
         continue;
       }
       const dataUrl = await blobToDataUrl(blob);

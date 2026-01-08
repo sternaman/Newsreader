@@ -129,6 +129,20 @@ _JUNK_PHRASES = [
     r"Show conversation",
     r"Advertisement",
     r"Coverage and analysis, selected by editors",
+    r"Copyright \xa9\d{4} Dow Jones & Company, Inc\. All Rights Reserved\.",
+    r"Copyright \xa9\d{4} Dow Jones & Company, Inc\.",
+    r"Copyright \xa9\d{4} Bloomberg L\.P\.",
+    r"Bloomberg L\.P\.",
+    r"Bloomberg Businessweek",
+    r"Bloomberg News",
+    r"Most Read",
+    r"Most Popular",
+    r"Related Stories",
+    r"More From Bloomberg",
+    r"More From Businessweek",
+    r"Recommended by",
+    r"Sign up for the .*newsletter",
+    r"Get the .*newsletter",
 ]
 _JUNK_TEXT_LINES = [
     r"^share$",
@@ -162,6 +176,23 @@ _JUNK_TEXT_LINES = [
     r"^most popular$",
     r"^further reading$",
     r"^[0-9a-f]{16,}$",
+    r"^bloomberg$",
+    r"^bloomberg businessweek$",
+    r"^bloomberg news$",
+    r"^businessweek$",
+    r"^most read$",
+    r"^most popular$",
+    r"^related stories$",
+    r"^more from bloomberg$",
+    r"^more from businessweek$",
+    r"^recommended for you$",
+    r"^read more$",
+    r"^read next$",
+    r"^continue reading$",
+    r"^sign up\b",
+    r"^subscribe\b",
+    r"^newsletter$",
+    r"^get the\b",
 ]
 
 _CSS_DUMP_PATTERNS = [
@@ -234,6 +265,18 @@ _WSJ_RELATED_MARKERS = [
     "Coverage and analysis, selected by editors",
     "Navigating the Markets",
 ]
+_BLOOMBERG_RELATED_MARKERS = [
+    "Most Read",
+    "Most Popular",
+    "Related Stories",
+    "More From Bloomberg",
+    "More From Businessweek",
+    "Recommended",
+    "Read More",
+    "Read Next",
+    "Continue Reading",
+    "Bloomberg Businessweek",
+]
 _WSJ_CONTACT_RE = re.compile(r"^write to\b.*@wsj\.com", flags=re.IGNORECASE)
 _URL_ONLY_RE = re.compile(r"^https?://\S+$", flags=re.IGNORECASE)
 
@@ -274,6 +317,17 @@ def _image_jpeg_quality() -> int:
     except ValueError:
         return 82
     return max(50, min(95, value))
+
+
+def _image_fetch_max_bytes() -> int:
+    raw = os.environ.get("IMAGE_FETCH_MAX_BYTES", "8388608").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 8 * 1024 * 1024
+    if value <= 0:
+        return 0
+    return max(256 * 1024, value)
 
 
 def _process_image(content: bytes, content_type: str) -> tuple:
@@ -317,8 +371,11 @@ def embed_images(
     html: str,
     fetch_remote: bool = False,
     base_url: Optional[str] = None,
-    max_bytes: int = 5 * 1024 * 1024,
+    max_bytes: Optional[int] = None,
 ) -> str:
+    if max_bytes is None:
+        max_bytes = _image_fetch_max_bytes()
+
     def resolve_url(raw: str) -> Optional[str]:
         if not raw:
             return None
@@ -360,7 +417,7 @@ def embed_images(
             if not chunk:
                 continue
             total += len(chunk)
-            if total > max_bytes:
+            if max_bytes > 0 and total > max_bytes:
                 return None
             chunks.append(chunk)
         if not chunks:
@@ -394,7 +451,7 @@ def embed_images(
                     size = int(size_header)
                 except ValueError:
                     size = None
-                if size and size > max_bytes:
+                if size and max_bytes > 0 and size > max_bytes:
                     return match.group(0)
             raw = read_response_bytes(response)
             if not raw:
@@ -560,6 +617,7 @@ def _clean_text_content_with_context(
         return ""
     lines = []
     wsj = bool(source_domain and "wsj.com" in source_domain.lower())
+    bloomberg = _is_bloomberg_domain(source_domain)
     byline_norm = re.sub(r"\s+", " ", byline.strip()) if byline else ""
     skip_byline = False
     skip_summary = False
@@ -646,6 +704,49 @@ def _clean_text_content_with_context(
                 continue
             if re.match(r"^\(?\d+\s*min\)?$", lower):
                 continue
+
+        if bloomberg:
+            if skip_related:
+                related_skipped += 1
+                if related_skipped >= 18:
+                    skip_related = False
+                continue
+            if lower.startswith(
+                (
+                    "most read",
+                    "most popular",
+                    "more from bloomberg",
+                    "more from businessweek",
+                    "related stories",
+                    "recommended",
+                    "read more",
+                    "read next",
+                    "continue reading",
+                )
+            ):
+                skip_related = True
+                related_skipped = 0
+                continue
+            if lower.startswith(("sign up", "subscribe", "get the", "newsletter")):
+                skip_related = True
+                related_skipped = 0
+                continue
+            if stripped in {"Bloomberg", "Bloomberg Businessweek", "Bloomberg News", "Businessweek"}:
+                continue
+            if lower.startswith("bloomberg"):
+                if len(stripped) <= 40:
+                    continue
+            if skip_byline:
+                if looks_like_content(stripped):
+                    skip_byline = False
+                else:
+                    continue
+            if lower == "by":
+                skip_byline = True
+                continue
+            if byline_norm:
+                if lower == byline_norm.lower() or lower == f"by {byline_norm.lower()}":
+                    continue
 
         if re.match(r"^https?://", stripped, flags=re.IGNORECASE):
             continue
@@ -743,6 +844,13 @@ def _is_market_value(text: str) -> bool:
     if re.match(r"^\d+/\d+$", text):
         return True
     return False
+
+
+def _is_bloomberg_domain(source_domain: Optional[str]) -> bool:
+    if not source_domain:
+        return False
+    lowered = source_domain.lower()
+    return "bloomberg.com" in lowered or "businessweek.com" in lowered
 
 
 def _has_wsj_menu(text: str) -> bool:
@@ -1088,7 +1196,9 @@ def audit_and_heal_content(
     audit_before = audit_content(content_html, source_domain)
     actions: List[str] = []
     cleaned = content_html
-    if source_domain and "wsj.com" in source_domain.lower():
+    is_wsj = bool(source_domain and "wsj.com" in source_domain.lower())
+    is_bloomberg = _is_bloomberg_domain(source_domain)
+    if is_wsj:
         stripped = _strip_wsj_blocks(cleaned)
         if stripped != cleaned:
             cleaned = stripped
@@ -1102,7 +1212,7 @@ def audit_and_heal_content(
         cleaned = stripped
         actions.append("strip_small_blocks")
 
-    if source_domain and "wsj.com" in source_domain.lower():
+    if is_wsj:
         stripped = _strip_leading_byline_blocks(cleaned)
         if stripped != cleaned:
             cleaned = stripped
@@ -1131,6 +1241,24 @@ def audit_and_heal_content(
         if stripped != cleaned:
             cleaned = stripped
             actions.append("strip_wsj_related_blocks")
+        stripped = _truncate_after_plain_marker(cleaned, r"\bcopyright\b", required_text="Dow Jones")
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_copyright")
+
+    if is_bloomberg:
+        stripped = _truncate_after_heading(cleaned, _BLOOMBERG_RELATED_MARKERS, min_links=3)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_heading_bloomberg")
+        stripped = _truncate_after_marker_block(cleaned, _BLOOMBERG_RELATED_MARKERS, min_links=3)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_marker_block_bloomberg")
+        stripped = _strip_link_heavy_blocks(cleaned, _BLOOMBERG_RELATED_MARKERS, min_links=4)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("strip_bloomberg_related_blocks")
 
     audit_mid = audit_content(cleaned, source_domain)
     fallback_issues = {
@@ -1151,7 +1279,7 @@ def audit_and_heal_content(
         if fallback_html:
             cleaned = fallback_html
             actions.append("fallback_text_content")
-            if source_domain and "wsj.com" in source_domain.lower():
+            if is_wsj:
                 stripped = _strip_wsj_blocks(cleaned)
                 if stripped != cleaned:
                     cleaned = stripped
@@ -1164,11 +1292,28 @@ def audit_and_heal_content(
             if stripped != cleaned:
                 cleaned = stripped
                 actions.append("strip_small_blocks_after_fallback")
-            if source_domain and "wsj.com" in source_domain.lower():
+            if is_wsj:
                 stripped = _strip_link_heavy_blocks(cleaned, _WSJ_RELATED_MARKERS)
                 if stripped != cleaned:
                     cleaned = stripped
                     actions.append("strip_wsj_related_blocks_after_fallback")
+                stripped = _truncate_after_plain_marker(cleaned, r"\bcopyright\b", required_text="Dow Jones")
+                if stripped != cleaned:
+                    cleaned = stripped
+                    actions.append("truncate_after_copyright_after_fallback")
+            if is_bloomberg:
+                stripped = _truncate_after_heading(cleaned, _BLOOMBERG_RELATED_MARKERS, min_links=3)
+                if stripped != cleaned:
+                    cleaned = stripped
+                    actions.append("truncate_after_heading_bloomberg_after_fallback")
+                stripped = _truncate_after_marker_block(cleaned, _BLOOMBERG_RELATED_MARKERS, min_links=3)
+                if stripped != cleaned:
+                    cleaned = stripped
+                    actions.append("truncate_after_marker_block_bloomberg_after_fallback")
+                stripped = _strip_link_heavy_blocks(cleaned, _BLOOMBERG_RELATED_MARKERS, min_links=4)
+                if stripped != cleaned:
+                    cleaned = stripped
+                    actions.append("strip_bloomberg_related_blocks_after_fallback")
     audit_after = audit_content(cleaned, source_domain)
     return cleaned, audit_before, audit_after, actions
 
@@ -1268,8 +1413,9 @@ def build_issue_epub(
 
     for idx, chapter in enumerate(chapters, start=1):
         chapter_title = chapter["title"]
-        if chapter_title.endswith(" - WSJ"):
-            chapter_title = chapter_title[:-6]
+        for suffix in (" - WSJ", " - Bloomberg", " - Bloomberg Businessweek", " - Businessweek"):
+            if chapter_title.endswith(suffix):
+                chapter_title = chapter_title[: -len(suffix)]
         content_html = _normalize_scene_breaks(chapter["content_html"])
         source_domain = (chapter.get("source_domain") or "").lower()
         if "wsj.com" in source_domain:

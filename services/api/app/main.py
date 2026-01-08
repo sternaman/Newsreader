@@ -4,7 +4,7 @@ import os
 import shlex
 import shutil
 import subprocess
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from dateutil import tz
 from fastapi import FastAPI, HTTPException, Request
@@ -23,6 +23,7 @@ EPUB_DIR = "/data/epubs"
 DEBUG_DIR = "/data/debug"
 DEBUG_ARTICLES_DIR = os.path.join(DEBUG_DIR, "articles")
 DEBUG_ISSUES_DIR = os.path.join(DEBUG_DIR, "issues")
+COVERS_DIR = "/data/covers"
 
 app.mount("/static", StaticFiles(directory="/app/app/static"), name="static")
 
@@ -34,6 +35,179 @@ def _now_local() -> datetime:
 
 def _issue_date() -> str:
     return _now_local().date().isoformat()
+
+
+def _retention_days() -> int:
+    raw = os.environ.get("RETENTION_DAYS", "3").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 3
+    return max(0, value)
+
+
+def _remove_issue_files(issue) -> None:
+    epub_path = issue.get("epub_path")
+    audit_path = issue.get("audit_path")
+    cover_paths = [
+        _cover_file_path(issue["id"], "cover"),
+        _cover_file_path(issue["id"], "thumb"),
+    ]
+    for path in (epub_path, audit_path, *cover_paths):
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    debug_dir = os.path.join(DEBUG_ISSUES_DIR, f"issue_{issue['id']}_{issue['issue_date']}")
+    if os.path.isdir(debug_dir):
+        try:
+            shutil.rmtree(debug_dir, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def _prune_old_issues(book_id: int | None = None) -> int:
+    retention_days = _retention_days()
+    if retention_days <= 0:
+        return 0
+    cutoff_date = _now_local().date() - timedelta(days=retention_days - 1)
+    cutoff_str = cutoff_date.isoformat()
+    rows = []
+    with get_conn() as conn:
+        if book_id is None:
+            rows = conn.execute(
+                "SELECT id, issue_date, epub_path, audit_path FROM issues WHERE issue_date < ?",
+                (cutoff_str,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, issue_date, epub_path, audit_path FROM issues WHERE book_id = ? AND issue_date < ?",
+                (book_id, cutoff_str),
+            ).fetchall()
+        rows = [dict(row) for row in rows]
+        issue_ids = [row["id"] for row in rows]
+        if not issue_ids:
+            return 0
+        placeholders = ",".join("?" for _ in issue_ids)
+        conn.execute(
+            f"DELETE FROM issue_articles WHERE issue_id IN ({placeholders})",
+            issue_ids,
+        )
+        conn.execute(
+            f"DELETE FROM issues WHERE id IN ({placeholders})",
+            issue_ids,
+        )
+        cutoff_dt = _now_local().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+            days=retention_days - 1
+        )
+        if book_id is None:
+            conn.execute(
+                "DELETE FROM articles WHERE created_at < ? AND id NOT IN (SELECT article_id FROM issue_articles)",
+                (cutoff_dt.isoformat(),),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM articles WHERE book_id = ? AND created_at < ? AND id NOT IN (SELECT article_id FROM issue_articles)",
+                (book_id, cutoff_dt.isoformat()),
+            )
+    for row in rows:
+        _remove_issue_files(row)
+    return len(rows)
+
+
+def _cover_file_path(issue_id: int, size: str) -> str:
+    suffix = "thumb" if size == "thumb" else "cover"
+    return os.path.join(COVERS_DIR, f"issue_{issue_id}_{suffix}.png")
+
+
+def _cover_dimensions(size: str) -> tuple[int, int]:
+    if size == "thumb":
+        return (300, 400)
+    return (600, 800)
+
+
+def _load_cover_font(point_size: int):
+    try:
+        from PIL import ImageFont
+
+        return ImageFont.truetype("DejaVuSans.ttf", point_size)
+    except Exception:
+        try:
+            from PIL import ImageFont
+
+            return ImageFont.load_default()
+        except Exception:
+            return None
+
+
+def _wrap_cover_text(text: str, draw, font, max_width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [""]
+    try:
+        measure = draw.textlength
+    except AttributeError:
+        measure = lambda value, font=None: len(value) * 6
+    lines = []
+    current: list[str] = []
+    for word in words:
+        test = " ".join(current + [word])
+        if not current or measure(test, font=font) <= max_width:
+            current.append(word)
+        else:
+            lines.append(" ".join(current))
+            current = [word]
+    if current:
+        lines.append(" ".join(current))
+    return lines
+
+
+def _generate_cover_image(issue: dict, size: str) -> str | None:
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+    width, height = _cover_dimensions(size)
+    image = Image.new("RGB", (width, height), color="white")
+    draw = ImageDraw.Draw(image)
+    title_font = _load_cover_font(28 if size == "thumb" else 36)
+    meta_font = _load_cover_font(18 if size == "thumb" else 22)
+    padding = int(width * 0.08)
+    y = padding
+    book_name = issue.get("book_name") or "Newsreader"
+    title_lines = _wrap_cover_text(str(book_name), draw, title_font, width - padding * 2)
+    line_height = int((title_font.size if title_font else 14) * 1.2)
+    for line in title_lines:
+        draw.text((padding, y), line, fill="black", font=title_font)
+        y += line_height
+    y += int(line_height * 0.6)
+    issue_date = issue.get("issue_date") or _issue_date()
+    draw.text((padding, y), f"Issue {issue_date}", fill="black", font=meta_font)
+    y += int((meta_font.size if meta_font else 12) * 1.6)
+    draw.text((padding, y), "Newsreader", fill="black", font=meta_font)
+    cover_path = _cover_file_path(issue["id"], size)
+    os.makedirs(COVERS_DIR, exist_ok=True)
+    image.save(cover_path, format="PNG")
+    return cover_path
+
+
+def _ensure_cover(issue: dict, size: str) -> str | None:
+    cover_path = _cover_file_path(issue["id"], size)
+    if os.path.exists(cover_path):
+        return cover_path
+    return _generate_cover_image(issue, size)
+
+
+def _issue_file_size(epub_path: str | None) -> int | None:
+    if not epub_path:
+        return None
+    if not os.path.exists(epub_path):
+        return None
+    try:
+        return os.path.getsize(epub_path)
+    except OSError:
+        return None
 
 
 def _kindle_send_enabled() -> bool:
@@ -138,42 +312,146 @@ def _opds_timestamp(value: str | None) -> str:
         return _now_local().isoformat()
 
 
-def _render_opds_feed(issues: list, *, base_url: str) -> str:
-    updated = _now_local().isoformat()
-    feed_id = f"{base_url}/opds"
-    entries = []
-    for issue in issues:
-        title = issue.get("title") or f"Issue {issue.get('id')}"
-        book_name = issue.get("book_name") or ""
-        updated_at = _opds_timestamp(issue.get("updated_at") or issue.get("created_at"))
-        author_block = ""
-        if book_name:
-            author_block = f"<author><name>{html.escape(book_name, quote=True)}</name></author>"
-        entry_lines = [
+def _render_opds_issue_entry(issue: dict) -> str:
+    title = issue.get("title") or f"Issue {issue.get('id')}"
+    book_name = issue.get("book_name") or ""
+    updated_at = _opds_timestamp(issue.get("updated_at") or issue.get("created_at"))
+    published_at = _opds_timestamp(issue.get("issue_date"))
+    size_bytes = issue.get("file_size")
+    summary_parts = []
+    if issue.get("issue_date"):
+        summary_parts.append(f"Issue date: {issue['issue_date']}")
+    if size_bytes:
+        summary_parts.append(f"Size: {int(size_bytes / 1024)} KB")
+    summary_block = ""
+    if summary_parts:
+        summary_block = f"<summary type=\"text\">{' | '.join(summary_parts)}</summary>"
+    author_block = ""
+    if book_name:
+        author_block = f"<author><name>{html.escape(book_name, quote=True)}</name></author>"
+    size_attr = f" length=\"{int(size_bytes)}\"" if size_bytes else ""
+    issue_id = issue.get("id")
+    return "\n".join(
+        [
             "<entry>",
             f"  <title>{html.escape(title, quote=True)}</title>",
-            f"  <id>tag:newsreader:issue:{issue.get('id')}</id>",
+            f"  <id>tag:newsreader:issue:{issue_id}</id>",
             f"  <updated>{updated_at}</updated>",
+            f"  <published>{published_at}</published>",
             f"  {author_block}" if author_block else "",
+            f"  {summary_block}" if summary_block else "",
             "  <link rel=\"http://opds-spec.org/acquisition\" type=\"application/epub+zip\" "
-            f"href=\"/download/{issue.get('id')}.epub\" />",
+            f"href=\"/download/{issue_id}.epub\"{size_attr} />",
+            "  <link rel=\"http://opds-spec.org/image\" type=\"image/png\" "
+            f"href=\"/covers/{issue_id}.png\" />",
+            "  <link rel=\"http://opds-spec.org/image/thumbnail\" type=\"image/png\" "
+            f"href=\"/covers/{issue_id}.png?size=thumb\" />",
             "</entry>",
         ]
-        entries.append("\n".join(line for line in entry_lines if line))
-    entries_xml = "\n".join(line for line in entries if line)
+    )
+
+
+def _render_opds_acquisition_feed(
+    issues: list,
+    *,
+    title: str,
+    feed_id: str,
+    self_href: str,
+) -> str:
+    updated = _now_local().isoformat()
+    entries_xml = "\n".join(_render_opds_issue_entry(issue) for issue in issues)
     return "\n".join(
         [
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
             "<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opds=\"http://opds-spec.org/2010/catalog\">",
             f"  <id>{html.escape(feed_id, quote=True)}</id>",
-            "  <title>Newsreader Catalog</title>",
+            f"  <title>{html.escape(title, quote=True)}</title>",
             f"  <updated>{updated}</updated>",
-            "  <link rel=\"self\" type=\"application/atom+xml\" href=\"/opds\" />",
+            f"  <link rel=\"self\" type=\"application/atom+xml\" href=\"{html.escape(self_href, quote=True)}\" />",
             "  <link rel=\"start\" type=\"application/atom+xml\" href=\"/opds\" />",
             entries_xml,
             "</feed>",
         ]
     )
+
+
+def _render_opds_navigation_feed(
+    *,
+    title: str,
+    feed_id: str,
+    self_href: str,
+    entries: list[dict],
+) -> str:
+    updated = _now_local().isoformat()
+    entry_lines = []
+    for entry in entries:
+        summary_block = ""
+        if entry.get("summary"):
+            summary_block = f"<summary type=\"text\">{html.escape(entry['summary'], quote=True)}</summary>"
+        entry_lines.append(
+            "\n".join(
+                [
+                    "<entry>",
+                    f"  <title>{html.escape(entry['title'], quote=True)}</title>",
+                    f"  <id>{html.escape(entry['id'], quote=True)}</id>",
+                    f"  <updated>{_opds_timestamp(entry.get('updated'))}</updated>",
+                    f"  {summary_block}" if summary_block else "",
+                    "  <link rel=\"subsection\" type=\"application/atom+xml\" "
+                    f"href=\"{html.escape(entry['href'], quote=True)}\" />",
+                    "</entry>",
+                ]
+            )
+        )
+    return "\n".join(
+        [
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+            "<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opds=\"http://opds-spec.org/2010/catalog\">",
+            f"  <id>{html.escape(feed_id, quote=True)}</id>",
+            f"  <title>{html.escape(title, quote=True)}</title>",
+            f"  <updated>{updated}</updated>",
+            f"  <link rel=\"self\" type=\"application/atom+xml\" href=\"{html.escape(self_href, quote=True)}\" />",
+            "  <link rel=\"start\" type=\"application/atom+xml\" href=\"/opds\" />",
+            "\n".join(entry_lines),
+            "</feed>",
+        ]
+    )
+
+
+def _fetch_opds_issues(where_clause: str = "", params: tuple = ()) -> list:
+    query = (
+        "SELECT issues.*, books.name AS book_name FROM issues "
+        "JOIN books ON books.id = issues.book_id "
+        "WHERE issues.build_status = 'complete' "
+    )
+    if where_clause:
+        query += f"AND {where_clause} "
+    query += "ORDER BY issue_date DESC, issues.id DESC LIMIT 200"
+    with get_conn() as conn:
+        rows = conn.execute(query, params).fetchall()
+    issues = []
+    for row in rows:
+        item = dict(row)
+        epub_path = item.get("epub_path")
+        size_bytes = _issue_file_size(epub_path)
+        if not epub_path or size_bytes is None:
+            continue
+        item["file_size"] = size_bytes
+        issues.append(item)
+    return issues
+
+
+def _fetch_opds_books() -> list:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT books.*, MAX(issues.updated_at) AS updated_at, COUNT(issues.id) AS issue_count
+            FROM books
+            LEFT JOIN issues ON issues.book_id = books.id AND issues.build_status = 'complete'
+            GROUP BY books.id
+            ORDER BY books.created_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def _book_or_404(book_id: int):
@@ -338,6 +616,7 @@ def _build_issue(book_id: int):
         except OSError:
             pass
 
+        _prune_old_issues(book_id=book_id)
         return issue
     except Exception as exc:
         now = _now_local().isoformat()
@@ -358,7 +637,9 @@ def startup():
     os.makedirs(EPUB_DIR, exist_ok=True)
     os.makedirs(DEBUG_ARTICLES_DIR, exist_ok=True)
     os.makedirs(DEBUG_ISSUES_DIR, exist_ok=True)
+    os.makedirs(COVERS_DIR, exist_ok=True)
     init_db()
+    _prune_old_issues()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -597,24 +878,105 @@ async def current_issue_api(book_id: int):
     return {"issue_id": issue["id"], "title": issue["title"], "issue_date": issue["issue_date"]}
 
 
+@app.get("/covers/{issue_id}.png")
+async def cover_image(issue_id: int, size: str = "cover"):
+    if size not in {"cover", "thumb"}:
+        raise HTTPException(status_code=400, detail="Invalid size")
+    with get_conn() as conn:
+        issue = conn.execute(
+            "SELECT issues.*, books.name AS book_name FROM issues "
+            "JOIN books ON books.id = issues.book_id WHERE issues.id = ?",
+            (issue_id,),
+        ).fetchone()
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    issue_data = dict(issue)
+    cover_path = _ensure_cover(issue_data, size)
+    if not cover_path or not os.path.exists(cover_path):
+        raise HTTPException(status_code=404, detail="Cover not available")
+    return FileResponse(cover_path, media_type="image/png", filename=os.path.basename(cover_path))
+
+
 @app.get("/opds")
 @app.get("/opds.xml")
 async def opds_catalog(request: Request):
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT issues.*, books.name AS book_name FROM issues "
-            "JOIN books ON books.id = issues.book_id "
-            "WHERE issues.build_status = 'complete' "
-            "ORDER BY issue_date DESC, issues.id DESC LIMIT 200"
-        ).fetchall()
-    issues = []
-    for row in rows:
-        item = dict(row)
-        epub_path = item.get("epub_path")
-        if epub_path and os.path.exists(epub_path):
-            issues.append(item)
     base_url = str(request.base_url).rstrip("/")
-    xml = _render_opds_feed(issues, base_url=base_url)
+    books = _fetch_opds_books()
+    today_count = len(_fetch_opds_issues("issue_date = ?", (_issue_date(),)))
+    total_count = len(_fetch_opds_issues())
+    entries = [
+        {
+            "title": "Today",
+            "id": "tag:newsreader:today",
+            "href": "/opds/today",
+            "updated": _now_local().isoformat(),
+            "summary": f"{today_count} issues",
+        },
+        {
+            "title": "All Issues",
+            "id": "tag:newsreader:all",
+            "href": "/opds/all",
+            "updated": _now_local().isoformat(),
+            "summary": f"{total_count} issues",
+        },
+    ]
+    for book in books:
+        issue_count = book.get("issue_count") or 0
+        entries.append(
+            {
+                "title": book["name"],
+                "id": f"tag:newsreader:book:{book['id']}",
+                "href": f"/opds/books/{book['id']}",
+                "updated": book.get("updated_at") or _now_local().isoformat(),
+                "summary": f"{issue_count} issues",
+            }
+        )
+    xml = _render_opds_navigation_feed(
+        title="Newsreader Catalog",
+        feed_id=f"{base_url}/opds",
+        self_href="/opds",
+        entries=entries,
+    )
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog;kind=navigation")
+
+
+@app.get("/opds/all")
+async def opds_all(request: Request):
+    base_url = str(request.base_url).rstrip("/")
+    issues = _fetch_opds_issues()
+    xml = _render_opds_acquisition_feed(
+        issues,
+        title="All Issues",
+        feed_id=f"{base_url}/opds/all",
+        self_href="/opds/all",
+    )
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog;kind=acquisition")
+
+
+@app.get("/opds/today")
+async def opds_today(request: Request):
+    base_url = str(request.base_url).rstrip("/")
+    issues = _fetch_opds_issues("issue_date = ?", (_issue_date(),))
+    xml = _render_opds_acquisition_feed(
+        issues,
+        title="Today",
+        feed_id=f"{base_url}/opds/today",
+        self_href="/opds/today",
+    )
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog;kind=acquisition")
+
+
+@app.get("/opds/books/{book_id}")
+async def opds_book(request: Request, book_id: int):
+    book = _book_or_404(book_id)
+    base_url = str(request.base_url).rstrip("/")
+    issues = _fetch_opds_issues("issues.book_id = ?", (book_id,))
+    xml = _render_opds_acquisition_feed(
+        issues,
+        title=f"{book['name']} Issues",
+        feed_id=f"{base_url}/opds/books/{book_id}",
+        self_href=f"/opds/books/{book_id}",
+    )
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog;kind=acquisition")
 
 
