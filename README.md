@@ -114,8 +114,10 @@ Embedded images are resized and compressed to keep EPUB sizes reasonable.
 
 ## Crosspoint-reader Notes
 
-- Copy the downloaded EPUB to the device storage/SD card.
-- If using a catalog flow, you can expose the `/download/*.epub` links in your preferred file browser or OPDS client.
+- Copy the downloaded EPUB to the device storage/SD card, or use OPDS.
+- OPDS feed: `http://<host>:8000/opds` (set **Calibre Web URL** on the device to `http://<host>:8000`).
+- On the X4 home screen, open **Calibre Library** to browse and download issues.
+- Current firmware does not render embedded images; validate images on PC/Kindle for now.
 
 ## Repository Layout
 
