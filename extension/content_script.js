@@ -1,4 +1,28 @@
 const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
+const MAX_IMAGE_WIDTH = 600;
+const WSJ_MARKET_TOKENS = new Set([
+  "Select",
+  "DJIA",
+  "S&P 500",
+  "Nasdaq",
+  "Russell 2000",
+  "U.S. 10 Yr",
+  "VIX",
+  "Gold",
+  "Bitcoin",
+  "Crude Oil",
+  "Dollar Index",
+  "KBW Nasdaq Bank Index",
+  "S&P GSCI Index Spot"
+]);
+const WSJ_MENU_INDICATORS = [
+  "The Wall Street Journal",
+  "English Edition",
+  "Print Edition",
+  "Latest Headlines",
+  "Puzzles",
+  "More"
+];
 
 const isWsjHost = (hostname) => hostname === "wsj.com" || hostname.endsWith(".wsj.com");
 
@@ -107,6 +131,17 @@ const extractSection = () =>
     "meta[name='dc.subject']"
   ]);
 
+const extractByline = () =>
+  extractMetaContent([
+    "meta[name='author']",
+    "meta[property='author']",
+    "meta[property='article:author']",
+    "meta[name='parsely-author']",
+    "meta[name='sailthru.author']",
+    "meta[name='dc.creator']",
+    "meta[name='byl']"
+  ]);
+
 const extractPublishedAtRaw = () =>
   extractMetaContent([
     "meta[property='article:published_time']",
@@ -121,11 +156,287 @@ const extractPublishedAtRaw = () =>
     "meta[name='sailthru.date']"
   ]);
 
-const cleanupArticleHtml = (html) => {
+const parseSrcsetBestUrl = (srcset) => {
+  if (!srcset) {
+    return null;
+  }
+  const entries = srcset
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!entries.length) {
+    return null;
+  }
+  let bestUrl = null;
+  let bestScore = -1;
+  for (const entry of entries) {
+    const parts = entry.split(/\s+/).filter(Boolean);
+    const url = parts[0];
+    const descriptor = parts[1] || "";
+    let score = 0;
+    if (descriptor.endsWith("w")) {
+      score = parseInt(descriptor.replace("w", ""), 10) || 0;
+    } else if (descriptor.endsWith("x")) {
+      score = Math.round((parseFloat(descriptor.replace("x", "")) || 0) * 100);
+    }
+    if (score >= bestScore) {
+      bestScore = score;
+      bestUrl = url;
+    }
+  }
+  return bestUrl || entries[entries.length - 1].split(/\s+/)[0];
+};
+
+const pickPictureSource = (img) => {
+  const picture = img.closest("picture");
+  if (!picture) {
+    return null;
+  }
+  const sources = Array.from(picture.querySelectorAll("source"));
+  for (const source of sources) {
+    const srcset = source.getAttribute("data-srcset") || source.getAttribute("srcset");
+    const srcsetUrl = parseSrcsetBestUrl(srcset);
+    if (srcsetUrl) {
+      return srcsetUrl;
+    }
+    const src = source.getAttribute("data-src") || source.getAttribute("src");
+    if (src) {
+      return src;
+    }
+  }
+  return null;
+};
+
+const pickAncestorSource = (img) => {
+  const attrs = [
+    "data-src",
+    "data-original",
+    "data-image",
+    "data-img",
+    "data-lazy-src",
+    "data-full-src"
+  ];
+  let node = img.parentElement;
+  for (let depth = 0; depth < 3 && node; depth += 1) {
+    for (const attr of attrs) {
+      const value = node.getAttribute(attr);
+      if (value) {
+        return value;
+      }
+    }
+    node = node.parentElement;
+  }
+  return null;
+};
+
+const pickImageSource = (img) => {
+  const attrs = [
+    "currentsourceurl",
+    "currentSourceUrl",
+    "currentSourceURL",
+    "data-native-src",
+    "data-src",
+    "data-lazy-src",
+    "data-original",
+    "data-hires",
+    "data-full-src",
+    "data-large-src",
+    "data-image",
+    "data-img",
+    "data-attr-src"
+  ];
+  for (const attr of attrs) {
+    const value = img.getAttribute(attr);
+    if (value) {
+      return value;
+    }
+  }
+  const pictureUrl = pickPictureSource(img);
+  if (pictureUrl) {
+    return pictureUrl;
+  }
+  const ancestorUrl = pickAncestorSource(img);
+  if (ancestorUrl) {
+    return ancestorUrl;
+  }
+  const srcset = img.getAttribute("data-srcset") || img.getAttribute("srcset");
+  const srcsetUrl = parseSrcsetBestUrl(srcset);
+  if (srcsetUrl) {
+    return srcsetUrl;
+  }
+  return img.currentSrc || img.getAttribute("src") || img.src || null;
+};
+
+const isPlaceholderImage = (src) => {
+  if (!src) {
+    return true;
+  }
+  const lowered = src.toLowerCase();
+  if (lowered.startsWith("data:") && lowered.length < 200) {
+    return true;
+  }
+  if (lowered.startsWith("blob:")) {
+    return true;
+  }
+  return /pixel|spacer|transparent|1x1/.test(lowered);
+};
+
+const normalizeImageUrl = (src, baseUrl) => {
+  if (!src) {
+    return null;
+  }
+  let raw = src.trim();
+  if (!raw) {
+    return null;
+  }
+  if (raw.startsWith("data:")) {
+    return raw;
+  }
+  if (raw.startsWith("blob:")) {
+    return null;
+  }
+  if (raw.startsWith("//")) {
+    raw = `https:${raw}`;
+  }
+  let url;
+  try {
+    url = new URL(raw, baseUrl);
+  } catch (error) {
+    return null;
+  }
+  if (isPlaceholderImage(url.toString())) {
+    return null;
+  }
+  if (url.hostname.endsWith("wsj.net") || url.hostname.endsWith("wsj.com")) {
+    if (/\/im-\d+\/OR\/?$/.test(url.pathname)) {
+      url.pathname = url.pathname.replace(/\/OR\/?$/, "");
+    }
+    const widthParam = url.searchParams.get("width") || url.searchParams.get("w");
+    if (widthParam) {
+      const widthValue = parseInt(widthParam, 10);
+      if (widthValue && widthValue > MAX_IMAGE_WIDTH) {
+        url.searchParams.set("width", String(MAX_IMAGE_WIDTH));
+        url.searchParams.delete("w");
+      }
+    } else {
+      url.searchParams.set("width", String(MAX_IMAGE_WIDTH));
+    }
+  }
+  if (/-1x-1\.(jpg|jpeg|png|webp)$/i.test(url.pathname)) {
+    url.pathname = url.pathname.replace(
+      /-1x-1\.(jpg|jpeg|png|webp)$/i,
+      `-${MAX_IMAGE_WIDTH}x-1.$1`
+    );
+  }
+  const genericWidth = url.searchParams.get("width");
+  if (genericWidth) {
+    const numeric = parseInt(genericWidth, 10);
+    if (numeric && numeric > 1200) {
+      url.searchParams.set("width", String(MAX_IMAGE_WIDTH));
+    }
+  }
+  return url.toString();
+};
+
+const normalizeImages = (doc, baseUrl) => {
+  doc.querySelectorAll("img").forEach((img) => {
+    const src = pickImageSource(img);
+    const normalized = normalizeImageUrl(src, baseUrl);
+    if (!normalized) {
+      img.remove();
+      return;
+    }
+    img.setAttribute("src", normalized);
+    ["srcset", "data-srcset", "sizes", "width", "height", "style", "loading", "decoding"].forEach(
+      (attr) => img.removeAttribute(attr)
+    );
+  });
+  doc.querySelectorAll("figure").forEach((figure) => {
+    if (!figure.querySelector("img")) {
+      figure.remove();
+    }
+  });
+};
+
+const looksLikeNameToken = (text) => {
+  if (!text || text.length > 60) {
+    return false;
+  }
+  if (/\d/.test(text)) {
+    return false;
+  }
+  if (!/^[A-Za-z'\\-\\.\\s,]+$/.test(text)) {
+    return false;
+  }
+  const words = text
+    .replace(/,/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length || words.length > 6) {
+    return false;
+  }
+  return words.every((word) => /^[A-Z]/.test(word));
+};
+
+const stripLeadingBylineBlocks = (doc, bylineValue) => {
+  if (!doc.body) {
+    return;
+  }
+  const normalizedByline = bylineValue ? normalizeText(bylineValue) : "";
+  const blocks = Array.from(doc.body.querySelectorAll("p, div, section"));
+  let started = false;
+  for (let i = 0; i < Math.min(blocks.length, 14); i += 1) {
+    const block = blocks[i];
+    const text = normalizeText(block.textContent || "");
+    if (!text) {
+      continue;
+    }
+    const lower = text.toLowerCase();
+    if (!started) {
+      if (lower === "by" || lower.startsWith("by ")) {
+        started = true;
+        block.remove();
+        continue;
+      }
+      if (normalizedByline && (text === normalizedByline || text === `By ${normalizedByline}`)) {
+        started = true;
+        block.remove();
+        continue;
+      }
+      continue;
+    }
+    if (lower === "and" || lower === "," || lower === "&") {
+      block.remove();
+      continue;
+    }
+    if (text.replace(/\s+/g, "") === "***") {
+      block.remove();
+      continue;
+    }
+    if (looksLikeNameToken(text)) {
+      block.remove();
+      continue;
+    }
+    break;
+  }
+};
+
+const removeUrlOnlyBlocks = (doc) => {
+  doc.querySelectorAll("p, div, section, li").forEach((el) => {
+    const text = normalizeText(el.textContent || "");
+    if (/^https?:\/\/\S+$/i.test(text)) {
+      el.remove();
+    }
+  });
+};
+
+const cleanupArticleHtml = (html, baseUrl = window.location.href, options = {}) => {
   if (typeof DOMParser === "undefined") {
     return html;
   }
   const doc = new DOMParser().parseFromString(html, "text/html");
+  const { byline } = options;
   const MAX_JUNK_LENGTH = 300;
   const cssTextPatterns = [
     /\/\*\s*theme vars/i,
@@ -137,6 +448,8 @@ const cleanupArticleHtml = (html) => {
   const junkPatterns = [
     /skip to main content/i,
     /this copy is for your personal, non-commercial use only/i,
+    /distribution and use of this material are governed by our subscriber agreement/i,
+    /for non-personal use or to order multiple copies/i,
     /subscriber agreement/i,
     /dow jones reprints/i,
     /djreprints\.com/i,
@@ -147,12 +460,14 @@ const cleanupArticleHtml = (html) => {
     /^share$/i,
     /^resize$/i,
     /^print$/i,
+    /sponsored offers/i,
+    /utility bar/i,
+    /conversation/i,
     /what to read next/i,
     /most popular/i,
     /recommended videos/i
   ];
   const selectors = [
-    "header",
     "nav",
     "footer",
     "aside",
@@ -161,8 +476,17 @@ const cleanupArticleHtml = (html) => {
     "noscript",
     "svg",
     "form",
+    "[data-testid='ad-container']",
+    "[data-spotim-app]",
+    "[data-spot-im-class]",
     "[aria-label*='Advertisement']",
     "[aria-label*='ad']",
+    "[aria-label*='Sponsored']",
+    "[aria-label*='Listen To Article']",
+    "[aria-label*='What to Read Next']",
+    "[aria-label*='Utility Bar']",
+    "[aria-label*='Conversation']",
+    "[aria-label*='Comment']",
     "[class*='ad-']",
     "[class*='advert']",
     "[class*='promo']",
@@ -176,14 +500,62 @@ const cleanupArticleHtml = (html) => {
     "[id*='ad']",
     "[id*='promo']",
     "[id*='footer']",
-    "[id*='header']",
     "[id*='nav']"
   ];
+  let isWsj = false;
+  try {
+    isWsj = isWsjHost(new URL(baseUrl).hostname);
+  } catch (error) {
+    isWsj = false;
+  }
+  const isMarketValue = (text) =>
+    /^[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?%?$/.test(text) || /^\d+\/\d+$/.test(text);
+  const marketHintText = (el) => {
+    const parent = el.parentElement || el;
+    const parentText = normalizeText(parent.textContent || "");
+    return Array.from(WSJ_MARKET_TOKENS).some((token) => parentText.includes(token));
+  };
+  const hasMenuIndicators = (text) => {
+    let hits = 0;
+    for (const token of WSJ_MENU_INDICATORS) {
+      if (text.includes(token)) {
+        hits += 1;
+      }
+      if (hits >= 2) {
+        return true;
+      }
+    }
+    return false;
+  };
   doc.querySelectorAll(selectors.join(",")).forEach((el) => el.remove());
+  doc.querySelectorAll("header").forEach((el) => {
+    const text = normalizeText(el.textContent || "");
+    const linkCount = el.querySelectorAll("a").length;
+    if (
+      linkCount >= 4 ||
+      /skip to|subscribe|sign in|log in|account|customer service/i.test(text)
+    ) {
+      el.remove();
+    }
+  });
   doc.querySelectorAll("p, div, span, li").forEach((el) => {
     const text = normalizeText(el.textContent || "");
     if (!text) {
       return;
+    }
+    if (isWsj) {
+      if (WSJ_MARKET_TOKENS.has(text)) {
+        el.remove();
+        return;
+      }
+      if (isMarketValue(text) && marketHintText(el)) {
+        el.remove();
+        return;
+      }
+      if (hasMenuIndicators(text)) {
+        el.remove();
+        return;
+      }
     }
     if (cssTextPatterns.some((pattern) => pattern.test(text))) {
       el.remove();
@@ -213,6 +585,10 @@ const cleanupArticleHtml = (html) => {
       el.remove();
     }
   });
+  removeUrlOnlyBlocks(doc);
+  if (isWsj) {
+    stripLeadingBylineBlocks(doc, byline);
+  }
   doc.querySelectorAll("a[href*='/market-data/quotes']").forEach((el) => el.remove());
   doc.querySelectorAll("h1").forEach((el) => el.remove());
   doc.querySelectorAll("a").forEach((link) => {
@@ -221,6 +597,7 @@ const cleanupArticleHtml = (html) => {
       link.remove();
     }
   });
+  normalizeImages(doc, baseUrl);
   return doc.body ? doc.body.innerHTML : html;
 };
 
@@ -235,6 +612,7 @@ const fallbackContentHtml = () => {
 
 const extractArticle = () => {
   const section = extractSection();
+  const metaByline = extractByline();
   const publishedAtRaw = extractPublishedAtRaw();
   try {
     const clone = document.cloneNode(true);
@@ -242,10 +620,14 @@ const extractArticle = () => {
     const article = reader.parse();
     if (article && article.content) {
       const textContent = article.textContent || document.body?.innerText || null;
-      const cleanedHtml = cleanupArticleHtml(article.content);
+      const byline = article.byline || metaByline;
+      const normalizedByline = byline ? normalizeText(byline) : null;
+      const cleanedHtml = cleanupArticleHtml(article.content, window.location.href, {
+        byline: normalizedByline
+      });
       return {
         title: article.title || document.title,
-        byline: article.byline,
+        byline: normalizedByline,
         excerpt: article.excerpt,
         content_html: cleanedHtml,
         text_content: textContent,
@@ -256,10 +638,13 @@ const extractArticle = () => {
   } catch (error) {
     console.warn("Readability failed", error);
   }
-  const fallbackHtml = cleanupArticleHtml(fallbackContentHtml());
+  const fallbackByline = metaByline ? normalizeText(metaByline) : null;
+  const fallbackHtml = cleanupArticleHtml(fallbackContentHtml(), window.location.href, {
+    byline: fallbackByline
+  });
   return {
     title: document.title,
-    byline: null,
+    byline: fallbackByline,
     excerpt: null,
     content_html: fallbackHtml,
     text_content: document.body?.innerText || null,

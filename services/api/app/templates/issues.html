@@ -8,6 +8,11 @@
         <li>
           <strong>{{ issue.title }}</strong>
           <span class="muted">{{ issue.book_name }}</span>
+          <span class="badge {{ issue.build_status or 'unknown' }}">{{ issue.build_status or "unknown" }}</span>
+          {% if issue.audit_summary %}
+            <span class="muted">Audit {{ issue.audit_summary.flagged_articles }} flagged</span>
+            <a href="/issues/{{ issue.id }}/audit">Audit</a>
+          {% endif %}
           <a href="/download/{{ issue.id }}.epub">Download</a>
         </li>
       {% endfor %}

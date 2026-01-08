@@ -1,11 +1,13 @@
 import base64
 import hashlib
 import html
+import io
 import math
 import os
 import re
 from datetime import datetime
 from typing import Iterable, List, Optional
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import bleach
 import requests
@@ -52,42 +54,57 @@ ALLOWED_ATTRS = {
 EINK_CSS = """
 body {
   font-family: "Georgia", "Times New Roman", serif;
-  font-size: 1.1em;
-  line-height: 1.5;
+  font-size: 1.05em;
+  line-height: 1.55;
   margin: 0;
   padding: 0;
 }
-article { padding: 1em 1.4em; }
-h1, h2, h3 { font-weight: bold; margin: 1em 0 0.5em; }
+article { padding: 0.9em 1.2em; }
+h1, h2, h3 {
+  font-weight: bold;
+  line-height: 1.2;
+  margin: 0.9em 0 0.4em;
+}
+h1 { font-size: 1.6em; }
+h2 { font-size: 1.3em; }
+h3 { font-size: 1.15em; }
+p { margin: 0 0 0.9em; }
 img {
-  max-width: 100%;
+  max-width: 85%;
+  width: auto;
   height: auto;
-  max-height: 65vh;
+  max-height: 48vh;
   object-fit: contain;
   display: block;
-  margin: 0.8em auto;
+  margin: 0.7em auto;
+  page-break-inside: avoid;
 }
 div.meta {
-  margin: 0.2em 0 1em;
-  padding-bottom: 0.6em;
+  margin: 0.3em 0 0.9em;
+  padding-bottom: 0.5em;
   border-bottom: 1px solid #ccc;
   color: #444;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
-div.meta-line { margin: 0.2em 0; }
-p.meta-excerpt { margin: 0.4em 0 0; font-style: italic; color: #555; }
-p.scene-break { text-align: center; letter-spacing: 0.2em; margin: 1em 0; }
+div.meta-line { margin: 0.15em 0; }
+p.meta-excerpt { margin: 0.35em 0 0; font-style: italic; color: #555; }
+p.scene-break { text-align: center; letter-spacing: 0.2em; margin: 0.8em 0; }
 figure {
-  margin: 0.8em 0;
+  margin: 0.7em 0 0.9em;
   break-inside: avoid;
   page-break-inside: avoid;
 }
 figcaption {
-  font-size: 0.85em;
+  font-size: 0.8em;
   text-align: center;
   color: #555;
 }
-blockquote { border-left: 3px solid #999; padding-left: 0.8em; color: #333; }
+blockquote {
+  border-left: 3px solid #999;
+  padding-left: 0.8em;
+  color: #333;
+  margin: 0.6em 0 0.9em;
+}
 """
 
 
@@ -95,18 +112,56 @@ _JUNK_PHRASES = [
     r"Skip to Main Content",
     r"Skip to\.\.\.",
     r"This copy is for your personal, non-commercial use only",
+    r"Distribution and use of this material are governed by our Subscriber Agreement",
+    r"For non-personal use or to order multiple copies",
     r"Subscriber Agreement",
     r"Dow Jones Reprints",
+    r"Copyright ©\d{4} Dow Jones & Company, Inc\. All Rights Reserved\.",
+    r"Copyright ©\d{4} Dow Jones & Company, Inc\.",
+    r"All Rights Reserved\.",
     r"www\.djreprints\.com",
     r"1-800-843-0008",
+    r"An artificial-intelligence tool created this summary",
+    r"Read more about how we use artificial intelligence",
+    r"Videos Most Popular News",
+    r"Most Popular News",
+    r"Further Reading",
+    r"Show conversation",
+    r"Advertisement",
+    r"Coverage and analysis, selected by editors",
 ]
 _JUNK_TEXT_LINES = [
     r"^share$",
     r"^resize$",
     r"^print$",
     r"^gift unlocked$",
+    r"^gift unlocked article",
     r"^listen$",
     r"^listen to article$",
+    r"^sponsored offers$",
+    r"^utility bar$",
+    r"^conversation$",
+    r"^show conversation$",
+    r"^advertisement$",
+    r"^video$",
+    r"^videos$",
+    r"^write to\b",
+    r"^what to read next$",
+    r"^most popular$",
+    r"^recommended videos$",
+    r"^quick summary$",
+    r"^view more$",
+    r"^updated\b",
+    r"^photography by\b",
+    r"^\|+\s*photography by\b",
+    r"^copyright ©\d{4} dow jones & company, inc\. all rights reserved\.",
+    r"^copyright ©\d{4} dow jones & company, inc\.",
+    r"^all rights reserved\.",
+    r"^videos most popular news",
+    r"^most popular news",
+    r"^most popular$",
+    r"^further reading$",
+    r"^[0-9a-f]{16,}$",
 ]
 
 _CSS_DUMP_PATTERNS = [
@@ -116,6 +171,71 @@ _CSS_DUMP_PATTERNS = [
     r"--typography-presets-",
     r":host\s*\{",
 ]
+
+_DATA_IMAGE_RE = re.compile(r'<img[^>]+src=["\'](data:image/[^"\']+)["\']', flags=re.IGNORECASE)
+_DATA_IMAGE_PREFIX = "data:image/"
+_DATA_IMAGE_EXTS = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+
+_WSJ_MARKET_TOKENS = {
+    "Select",
+    "DJIA",
+    "S&P 500",
+    "Nasdaq",
+    "Russell 2000",
+    "U.S. 10 Yr",
+    "VIX",
+    "Gold",
+    "Bitcoin",
+    "Crude Oil",
+    "Dollar Index",
+    "KBW Nasdaq Bank Index",
+    "S&P GSCI Index Spot",
+}
+_WSJ_MENU_TOKENS = [
+    "The Wall Street Journal",
+    "English Edition",
+    "Print Edition",
+    "Latest Headlines",
+    "Puzzles",
+    "More",
+]
+_WSJ_NAV_TOKENS = [
+    "World",
+    "Business",
+    "U.S.",
+    "Politics",
+    "Economy",
+    "Tech",
+    "Markets",
+    "Opinion",
+    "Free Expression",
+    "Arts",
+    "Lifestyle",
+    "Real Estate",
+    "Personal Finance",
+    "Health",
+    "Style",
+    "Sports",
+    "Autos",
+]
+_WSJ_RELATED_MARKERS = [
+    "Videos",
+    "Most Popular",
+    "Most Popular News",
+    "Further Reading",
+    "Show conversation",
+    "Advertisement",
+    "Coverage and analysis, selected by editors",
+    "Navigating the Markets",
+]
+_WSJ_CONTACT_RE = re.compile(r"^write to\b.*@wsj\.com", flags=re.IGNORECASE)
+_URL_ONLY_RE = re.compile(r"^https?://\S+$", flags=re.IGNORECASE)
 
 
 def sanitize_html(html: str) -> str:
@@ -138,23 +258,203 @@ def _data_url_from_bytes(content: bytes, content_type: str) -> str:
     return f"data:{content_type};base64,{encoded}"
 
 
-def embed_images(html: str, fetch_remote: bool = False) -> str:
+def _image_max_dim() -> int:
+    raw = os.environ.get("IMAGE_MAX_DIM", "1400").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 1400
+    return max(400, min(3000, value))
+
+
+def _image_jpeg_quality() -> int:
+    raw = os.environ.get("IMAGE_JPEG_QUALITY", "82").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 82
+    return max(50, min(95, value))
+
+
+def _process_image(content: bytes, content_type: str) -> tuple:
+    try:
+        from PIL import Image
+    except ImportError:
+        return content, content_type
+    try:
+        image = Image.open(io.BytesIO(content))
+        max_dim = _image_max_dim()
+        if max_dim:
+            width, height = image.size
+            if max(width, height) > max_dim:
+                scale = max_dim / max(width, height)
+                new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+                image = image.resize(new_size, Image.LANCZOS)
+
+        normalized_type = content_type.lower()
+        if normalized_type in ("image/webp", "image/jpeg", "image/jpg"):
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            out = io.BytesIO()
+            image.save(
+                out,
+                format="JPEG",
+                quality=_image_jpeg_quality(),
+                optimize=True,
+                progressive=True,
+            )
+            return out.getvalue(), "image/jpeg"
+        if normalized_type == "image/png":
+            out = io.BytesIO()
+            image.save(out, format="PNG", optimize=True)
+            return out.getvalue(), "image/png"
+    except Exception:
+        return content, content_type
+    return content, content_type
+
+
+def embed_images(
+    html: str,
+    fetch_remote: bool = False,
+    base_url: Optional[str] = None,
+    max_bytes: int = 5 * 1024 * 1024,
+) -> str:
+    def resolve_url(raw: str) -> Optional[str]:
+        if not raw:
+            return None
+        src = raw.strip()
+        if not src:
+            return None
+        if src.startswith("data:"):
+            return src
+        if src.startswith("//"):
+            src = f"https:{src}"
+        if base_url:
+            try:
+                return urljoin(base_url, src)
+            except Exception:
+                return src
+        return src
+
+    def normalize_wsj_image_url(src: str) -> str:
+        try:
+            parsed = urlparse(src)
+        except Exception:
+            return src
+        if not parsed.netloc.endswith("wsj.net"):
+            return src
+        path = parsed.path
+        if path.endswith("/OR"):
+            path = path[: -len("/OR")]
+        elif path.endswith("/OR/"):
+            path = path[: -len("/OR/")]
+        if path != parsed.path:
+            parsed = parsed._replace(path=path)
+            return urlunparse(parsed)
+        return src
+
+    def read_response_bytes(response: requests.Response) -> Optional[bytes]:
+        total = 0
+        chunks = []
+        for chunk in response.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > max_bytes:
+                return None
+            chunks.append(chunk)
+        if not chunks:
+            return None
+        return b"".join(chunks)
+
     def replace(match):
         src = match.group(1)
-        if src.startswith("data:"):
+        resolved = resolve_url(src)
+        if not resolved:
             return match.group(0)
+        if resolved.startswith("data:"):
+            return match.group(0).replace(src, resolved)
         if not fetch_remote:
             return match.group(0)
+        response = None
         try:
-            response = requests.get(src, timeout=10)
+            headers = {"User-Agent": "Mozilla/5.0"}
+            if base_url:
+                headers["Referer"] = base_url
+            headers["Accept"] = "image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5"
+            fetch_url = normalize_wsj_image_url(resolved)
+            response = requests.get(fetch_url, timeout=10, stream=True, headers=headers)
             response.raise_for_status()
-            content_type = response.headers.get("Content-Type", "image/jpeg")
-            data_url = _data_url_from_bytes(response.content, content_type)
+            content_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+            if not content_type.lower().startswith("image/"):
+                return match.group(0)
+            size_header = response.headers.get("Content-Length")
+            if size_header:
+                try:
+                    size = int(size_header)
+                except ValueError:
+                    size = None
+                if size and size > max_bytes:
+                    return match.group(0)
+            raw = read_response_bytes(response)
+            if not raw:
+                return match.group(0)
+            raw, content_type = _process_image(raw, content_type)
+            data_url = _data_url_from_bytes(raw, content_type)
             return match.group(0).replace(src, data_url)
         except Exception:
             return match.group(0)
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
 
     return re.sub(r'<img[^>]+src=["\']([^"\']+)["\']', replace, html, flags=re.IGNORECASE)
+
+
+def _extract_data_images(
+    content_html: str,
+    book: epub.EpubBook,
+    image_cache: dict,
+    chapter_idx: int,
+) -> str:
+    if not content_html:
+        return content_html
+
+    counter = 0
+
+    def replace(match):
+        nonlocal counter
+        data_url = match.group(1)
+        if not data_url or not data_url.startswith(_DATA_IMAGE_PREFIX):
+            return match.group(0)
+        if ";base64," not in data_url:
+            return match.group(0)
+        header, b64_data = data_url.split(",", 1)
+        mime = header.split(";", 1)[0].replace("data:", "")
+        ext = _DATA_IMAGE_EXTS.get(mime)
+        if not ext:
+            return match.group(0)
+        try:
+            raw = base64.b64decode(b64_data)
+        except Exception:
+            return match.group(0)
+        raw, mime = _process_image(raw, mime)
+        digest = hashlib.sha256(raw).hexdigest()
+        ext = _DATA_IMAGE_EXTS.get(mime)
+        if not ext:
+            return match.group(0)
+        filename = image_cache.get(digest)
+        if not filename:
+            filename = f"images/chapter_{chapter_idx}_{counter}.{ext}"
+            counter += 1
+            item = epub.EpubItem(uid=filename, file_name=filename, media_type=mime, content=raw)
+            book.add_item(item)
+            image_cache[digest] = filename
+        return match.group(0).replace(data_url, filename)
+
+    return _DATA_IMAGE_RE.sub(replace, content_html)
 
 
 def compute_content_hash(url: str, content_html: str) -> str:
@@ -248,14 +548,105 @@ def _looks_like_css_dump(content_html: str) -> bool:
 
 
 def _clean_text_content(text_content: Optional[str]) -> str:
+    return _clean_text_content_with_context(text_content)
+
+
+def _clean_text_content_with_context(
+    text_content: Optional[str],
+    source_domain: Optional[str] = None,
+    byline: Optional[str] = None,
+) -> str:
     if not text_content:
         return ""
     lines = []
+    wsj = bool(source_domain and "wsj.com" in source_domain.lower())
+    byline_norm = re.sub(r"\s+", " ", byline.strip()) if byline else ""
+    skip_byline = False
+    skip_summary = False
+    summary_skipped = 0
+    skip_related = False
+    related_skipped = 0
+
+    def looks_like_content(value: str) -> bool:
+        if len(value) >= 60:
+            return True
+        if "." in value:
+            return True
+        return False
+
+    def is_all_caps_section(value: str) -> bool:
+        letters = re.sub(r"[^A-Za-z]", "", value)
+        if len(letters) < 6:
+            return False
+        upper = sum(1 for ch in letters if ch.isupper())
+        return upper / max(len(letters), 1) >= 0.85
+
     for raw_line in text_content.splitlines():
         stripped = raw_line.strip()
         if not stripped:
             lines.append("")
+            skip_related = False
             continue
+        lower = stripped.lower()
+
+        if wsj:
+            if skip_related:
+                related_skipped += 1
+                if related_skipped >= 25:
+                    skip_related = False
+                continue
+            if lower.startswith(
+                ("videos most popular", "most popular news", "most popular", "further reading", "show conversation")
+            ):
+                skip_related = True
+                related_skipped = 0
+                continue
+            if lower.startswith("write to"):
+                skip_related = True
+                related_skipped = 0
+                continue
+            if "The Wall Street Journal" in stripped:
+                continue
+            if is_all_caps_section(stripped) and len(stripped) <= 40:
+                continue
+            if skip_summary:
+                summary_skipped += 1
+                if "view more" in lower:
+                    skip_summary = False
+                elif summary_skipped >= 8:
+                    skip_summary = False
+                continue
+            if lower == "quick summary":
+                skip_summary = True
+                summary_skipped = 0
+                continue
+            if "artificial-intelligence tool created this summary" in lower:
+                continue
+            if "read more about how we use artificial intelligence" in lower:
+                continue
+
+            if skip_byline:
+                if looks_like_content(stripped):
+                    skip_byline = False
+                else:
+                    continue
+            if lower == "by":
+                skip_byline = True
+                continue
+            if byline_norm:
+                if lower == byline_norm.lower() or lower == f"by {byline_norm.lower()}":
+                    continue
+            if lower in {",", "and"}:
+                continue
+            if stripped in _WSJ_MARKET_TOKENS:
+                continue
+            if _is_market_value(stripped):
+                continue
+            if re.match(r"^\d+(\.\d+)?$", stripped) and len(stripped) <= 6:
+                continue
+            if re.match(r"^\(?\d+\s*min\)?$", lower):
+                continue
+
         if re.match(r"^https?://", stripped, flags=re.IGNORECASE):
             continue
         if any(re.search(pattern, stripped, flags=re.IGNORECASE) for pattern in _JUNK_TEXT_LINES):
@@ -263,18 +654,523 @@ def _clean_text_content(text_content: Optional[str]) -> str:
         if any(re.search(pattern, stripped, flags=re.IGNORECASE) for pattern in _JUNK_PHRASES):
             continue
         lines.append(stripped)
+
     cleaned = "\n".join(lines)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
-def _text_to_paragraphs(text_content: Optional[str]) -> str:
-    cleaned = _clean_text_content(text_content)
+def _text_to_paragraphs(
+    text_content: Optional[str],
+    *,
+    source_domain: Optional[str] = None,
+    byline: Optional[str] = None,
+) -> str:
+    cleaned = _clean_text_content_with_context(text_content, source_domain, byline)
     if not cleaned:
         return ""
     chunks = [chunk.strip() for chunk in re.split(r"\n{2,}", cleaned) if chunk.strip()]
     if not chunks:
         return ""
     return "".join(f"<p>{html.escape(chunk, quote=True)}</p>" for chunk in chunks)
+
+
+def _strip_tags(value: str) -> str:
+    if not value:
+        return ""
+    stripped = re.sub(r"<[^>]+>", " ", value)
+    return html.unescape(re.sub(r"\s+", " ", stripped).strip())
+
+
+def _looks_like_byline_name(text: str) -> bool:
+    if not text:
+        return False
+    if len(text) > 60:
+        return False
+    if any(ch.isdigit() for ch in text):
+        return False
+    if not re.match(r"^[A-Za-z'\-\.\s,]+$", text):
+        return False
+    words = [word for word in re.split(r"\s+", text.replace(",", " ").strip()) if word]
+    if not words or len(words) > 6:
+        return False
+    if not all(word[0].isupper() for word in words if word):
+        return False
+    return True
+
+
+def derive_byline_from_text(text_content: Optional[str], source_domain: Optional[str]) -> Optional[str]:
+    if not text_content:
+        return None
+    if not source_domain or "wsj.com" not in source_domain.lower():
+        return None
+    lines = [line.strip() for line in text_content.splitlines() if line.strip()]
+    if not lines:
+        return None
+    window = lines[:12]
+    for idx, line in enumerate(window):
+        lower = line.lower()
+        if lower.startswith("by "):
+            candidate = line[3:].strip(" ,")
+            if candidate:
+                return candidate
+        if lower == "by":
+            tokens: List[str] = []
+            for next_line in window[idx + 1 : idx + 8]:
+                lower_next = next_line.lower()
+                if lower_next in {"and", "&"}:
+                    tokens.append("and")
+                    continue
+                if lower_next == ",":
+                    tokens.append(",")
+                    continue
+                if _looks_like_byline_name(next_line):
+                    tokens.append(next_line)
+                    continue
+                break
+            if tokens:
+                joined = " ".join(tokens)
+                joined = re.sub(r"\s*,\s*", ", ", joined)
+                joined = re.sub(r"\s+and\s+", " and ", joined, flags=re.IGNORECASE)
+                return joined.strip(" ,")
+    return None
+
+
+def _is_market_value(text: str) -> bool:
+    if not text:
+        return False
+    if re.match(r"^[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?%?$", text):
+        return True
+    if re.match(r"^\d+/\d+$", text):
+        return True
+    return False
+
+
+def _has_wsj_menu(text: str) -> bool:
+    if not text:
+        return False
+    hits = sum(1 for token in _WSJ_MENU_TOKENS if token in text)
+    nav_hits = sum(1 for token in _WSJ_NAV_TOKENS if token in text)
+    return hits >= 2 or nav_hits >= 6
+
+
+def _strip_wsj_blocks(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    paragraphs = re.findall(r"<p[^>]*>.*?</p>", content_html, flags=re.IGNORECASE | re.DOTALL)
+    numeric_hits = 0
+    for para in paragraphs[:25]:
+        text = _strip_tags(para)
+        if _is_market_value(text) or re.match(r"^\d+(\.\d+)?$", text):
+            numeric_hits += 1
+    has_numeric_ticker = numeric_hits >= 4
+
+    if (
+        not has_numeric_ticker
+        and not any(token in content_html for token in _WSJ_MARKET_TOKENS)
+        and not any(token in content_html for token in _WSJ_MENU_TOKENS)
+    ):
+        return content_html
+    parts = re.split(r"(<p[^>]*>.*?</p>)", content_html, flags=re.IGNORECASE | re.DOTALL)
+    cleaned_parts = []
+    in_ticker = False
+    for part in parts:
+        if not part.lower().startswith("<p"):
+            cleaned_parts.append(part)
+            continue
+        text = _strip_tags(part)
+        if not text:
+            cleaned_parts.append(part)
+            continue
+        if "The Wall Street Journal" in text:
+            cleaned_parts.append("")
+            continue
+        if text in _WSJ_MARKET_TOKENS:
+            in_ticker = True
+            continue
+        if (in_ticker or has_numeric_ticker) and (_is_market_value(text) or text in _WSJ_MARKET_TOKENS):
+            continue
+        if has_numeric_ticker and re.match(r"^\d+(\.\d+)?$", text):
+            continue
+        if in_ticker and not (_is_market_value(text) or text in _WSJ_MARKET_TOKENS):
+            in_ticker = False
+        if _has_wsj_menu(text):
+            continue
+        cleaned_parts.append(part)
+    return "".join(cleaned_parts)
+
+
+def _strip_leading_byline_blocks(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    block_re = re.compile(r"<(p|div|section)[^>]*>.*?</\1>", flags=re.IGNORECASE | re.DOTALL)
+    matches = list(block_re.finditer(content_html))
+    if not matches:
+        return content_html
+    remove_idxs = set()
+    found = False
+    max_blocks = min(len(matches), 14)
+    for idx in range(max_blocks):
+        match = matches[idx]
+        text = _strip_tags(match.group(0)).strip()
+        if not text:
+            continue
+        lower = text.lower()
+        if not found:
+            if lower == "by" or lower.startswith("by "):
+                found = True
+                remove_idxs.add(idx)
+            continue
+        if lower in {"and", ",", "&"}:
+            remove_idxs.add(idx)
+            continue
+        if text.replace(" ", "") == SCENE_BREAK_MARKER.replace(" ", ""):
+            remove_idxs.add(idx)
+            continue
+        if _looks_like_byline_name(text):
+            remove_idxs.add(idx)
+            continue
+        break
+    if not remove_idxs:
+        return content_html
+    output = []
+    last = 0
+    for idx, match in enumerate(matches):
+        if idx not in remove_idxs:
+            continue
+        output.append(content_html[last:match.start()])
+        last = match.end()
+    output.append(content_html[last:])
+    return "".join(output)
+
+
+def _strip_paragraphs_by_patterns(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    patterns = list(_JUNK_PHRASES) + list(_JUNK_TEXT_LINES)
+    tags = ("p", "li")
+    cleaned = content_html
+    for tag in tags:
+        regex = re.compile(rf"<{tag}[^>]*>.*?</{tag}>", flags=re.IGNORECASE | re.DOTALL)
+
+        def replace(match):
+            text = _strip_tags(match.group(0))
+            if not text:
+                return match.group(0)
+            if _URL_ONLY_RE.match(text):
+                return ""
+            if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
+                return ""
+            return match.group(0)
+
+        cleaned = regex.sub(replace, cleaned)
+    return cleaned
+
+
+def _strip_small_blocks_by_patterns(content_html: str, max_len: int = 180) -> str:
+    if not content_html:
+        return content_html
+    patterns = list(_JUNK_PHRASES) + list(_JUNK_TEXT_LINES)
+    tags = ("div", "section")
+    cleaned = content_html
+    for tag in tags:
+        regex = re.compile(rf"<{tag}[^>]*>.*?</{tag}>", flags=re.IGNORECASE | re.DOTALL)
+
+        def replace(match):
+            text = _strip_tags(match.group(0))
+            if not text:
+                return match.group(0)
+            if len(text) > max_len:
+                return match.group(0)
+            if _URL_ONLY_RE.match(text):
+                return ""
+            if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
+                return ""
+            return match.group(0)
+
+        cleaned = regex.sub(replace, cleaned)
+    return cleaned
+
+
+def _truncate_after_heading(
+    content_html: str,
+    markers: Iterable[str],
+    *,
+    min_links: int = 4,
+) -> str:
+    if not content_html:
+        return content_html
+    marker_set = [marker.lower() for marker in markers]
+    heading_re = re.compile(r"<h[1-6][^>]*>.*?</h[1-6]>", flags=re.IGNORECASE | re.DOTALL)
+    for match in heading_re.finditer(content_html):
+        heading_text = _strip_tags(match.group(0)).strip().lower()
+        if not heading_text:
+            continue
+        if not any(marker in heading_text for marker in marker_set):
+            continue
+        tail = content_html[match.end() :]
+        link_count = len(re.findall(r"<a\b", tail, flags=re.IGNORECASE))
+        if link_count >= min_links:
+            return content_html[: match.start()]
+    return content_html
+
+
+def _truncate_after_marker_block(
+    content_html: str,
+    markers: Iterable[str],
+    *,
+    min_links: int = 4,
+) -> str:
+    if not content_html:
+        return content_html
+    marker_set = [re.sub(r"\\s+", " ", marker.lower()).strip() for marker in markers]
+    block_re = re.compile(r"<(p|div|section|h[1-6])[^>]*>.*?</\\1>", flags=re.IGNORECASE | re.DOTALL)
+    for match in block_re.finditer(content_html):
+        text = _strip_tags(match.group(0))
+        if not text:
+            continue
+        normalized = re.sub(r"\\s+", " ", text).strip().lower()
+        if len(normalized) > 40:
+            continue
+        cleaned = re.sub(r"[^a-z0-9 ]", "", normalized).strip()
+        if not cleaned:
+            continue
+        if cleaned not in marker_set:
+            continue
+        tail = content_html[match.end() :]
+        link_count = len(re.findall(r"<a\b", tail, flags=re.IGNORECASE))
+        img_count = len(re.findall(r"<img\b", tail, flags=re.IGNORECASE))
+        if link_count + img_count >= min_links:
+            return content_html[: match.start()]
+    return content_html
+
+
+def _truncate_after_plain_marker(
+    content_html: str,
+    marker_re: str,
+    *,
+    required_text: Optional[str] = None,
+    tag_names: Iterable[str] = ("p", "div", "section", "li", "h3", "h4"),
+) -> str:
+    if not content_html:
+        return content_html
+    match = re.search(marker_re, content_html, flags=re.IGNORECASE)
+    if not match:
+        return content_html
+    if required_text:
+        tail = content_html[match.start() : match.start() + 2000].lower()
+        if required_text.lower() not in tail:
+            return content_html
+    start = -1
+    for tag in tag_names:
+        idx = content_html.rfind(f"<{tag}", 0, match.start())
+        if idx > start:
+            start = idx
+    if start == -1:
+        start = match.start()
+    return content_html[:start]
+
+
+def _truncate_after_contact_line(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    block_re = re.compile(r"<(p|div|section|li)[^>]*>.*?</\\1>", flags=re.IGNORECASE | re.DOTALL)
+    for match in block_re.finditer(content_html):
+        text = _strip_tags(match.group(0)).strip()
+        if not text:
+            continue
+        if not re.search(r"\bwrite to\b", text, flags=re.IGNORECASE):
+            continue
+        if "@wsj.com" not in text.lower():
+            continue
+        # If the block is small, drop everything after it.
+        if len(text) <= 260:
+            return content_html[: match.start()]
+    return content_html
+
+
+def _truncate_after_contact_paragraph(content_html: str) -> str:
+    if not content_html:
+        return content_html
+    para_re = re.compile(r"<p[^>]*>.*?</p>", flags=re.IGNORECASE | re.DOTALL)
+    for match in para_re.finditer(content_html):
+        text = _strip_tags(match.group(0)).strip()
+        if not text:
+            continue
+        if not re.search(r"\bwrite to\b", text, flags=re.IGNORECASE):
+            continue
+        if "@wsj.com" not in text.lower():
+            continue
+        return content_html[: match.start()]
+    return content_html
+
+
+def _strip_link_heavy_blocks(
+    content_html: str,
+    markers: Iterable[str],
+    *,
+    min_links: int = 6,
+) -> str:
+    if not content_html:
+        return content_html
+    patterns = [re.compile(re.escape(marker), flags=re.IGNORECASE) for marker in markers]
+    regex = re.compile(r"<(section|div|ul|ol)[^>]*>.*?</\\1>", flags=re.IGNORECASE | re.DOTALL)
+
+    def replace(match):
+        block = match.group(0)
+        text = _strip_tags(block)
+        if not text:
+            return block
+        if not any(pattern.search(text) for pattern in patterns):
+            return block
+        link_count = len(re.findall(r"<a\b", block, flags=re.IGNORECASE))
+        if link_count >= min_links:
+            return ""
+        return block
+
+    return regex.sub(replace, content_html)
+
+
+def _wsj_ticker_present(text: str) -> bool:
+    if not text:
+        return False
+    hits = [token for token in _WSJ_MARKET_TOKENS if token in text]
+    if len(hits) >= 3:
+        return True
+    if "DJIA" in text and "S&P 500" in text:
+        return True
+    return False
+
+
+def audit_content(content_html: str, source_domain: Optional[str] = None) -> dict:
+    text = _strip_tags(content_html)
+    issues: List[str] = []
+    junk_hits = [pattern for pattern in _JUNK_PHRASES if re.search(pattern, text, flags=re.IGNORECASE)]
+    if junk_hits:
+        issues.append("junk_phrases")
+    if _html_text_length(content_html) < MIN_CONTENT_TEXT_LEN:
+        issues.append("short_content")
+    if _looks_like_css_dump(content_html):
+        issues.append("css_dump")
+
+    wsj_ticker = False
+    wsj_menu = False
+    wsj_brand = False
+    wsj_summary = False
+    if source_domain and "wsj.com" in source_domain.lower():
+        wsj_ticker = _wsj_ticker_present(text)
+        wsj_menu = _has_wsj_menu(text)
+        wsj_brand = "The Wall Street Journal" in text
+        wsj_summary = "Quick Summary" in text
+        if wsj_ticker:
+            issues.append("wsj_ticker")
+        if wsj_menu:
+            issues.append("wsj_menu")
+        if wsj_brand:
+            issues.append("wsj_brand")
+        if wsj_summary:
+            issues.append("wsj_summary")
+
+    return {
+        "text_length": len(text),
+        "issues": issues,
+        "junk_hits": junk_hits,
+        "wsj": {"ticker": wsj_ticker, "menu": wsj_menu, "brand": wsj_brand, "summary": wsj_summary},
+        "needs_heal": bool(issues),
+    }
+
+
+def audit_and_heal_content(
+    content_html: str,
+    text_content: Optional[str],
+    source_domain: Optional[str],
+    byline: Optional[str] = None,
+) -> tuple:
+    audit_before = audit_content(content_html, source_domain)
+    actions: List[str] = []
+    cleaned = content_html
+    if source_domain and "wsj.com" in source_domain.lower():
+        stripped = _strip_wsj_blocks(cleaned)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("strip_wsj_blocks")
+    stripped = _strip_paragraphs_by_patterns(cleaned)
+    if stripped != cleaned:
+        cleaned = stripped
+        actions.append("strip_junk_paragraphs")
+    stripped = _strip_small_blocks_by_patterns(cleaned)
+    if stripped != cleaned:
+        cleaned = stripped
+        actions.append("strip_small_blocks")
+
+    if source_domain and "wsj.com" in source_domain.lower():
+        stripped = _strip_leading_byline_blocks(cleaned)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("strip_leading_byline")
+        stripped = _truncate_after_contact_paragraph(cleaned)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_contact_paragraph")
+        stripped = _truncate_after_plain_marker(cleaned, r"\bwrite to\b", required_text="@wsj.com")
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_plain_marker")
+        stripped = _truncate_after_contact_line(cleaned)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_contact_line")
+        stripped = _truncate_after_heading(cleaned, _WSJ_RELATED_MARKERS)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_heading")
+        stripped = _truncate_after_marker_block(cleaned, _WSJ_RELATED_MARKERS)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("truncate_after_marker_block")
+        stripped = _strip_link_heavy_blocks(cleaned, _WSJ_RELATED_MARKERS)
+        if stripped != cleaned:
+            cleaned = stripped
+            actions.append("strip_wsj_related_blocks")
+
+    audit_mid = audit_content(cleaned, source_domain)
+    fallback_issues = {
+        "short_content",
+        "css_dump",
+        "wsj_ticker",
+        "wsj_menu",
+        "wsj_brand",
+        "wsj_summary",
+    }
+    should_fallback = any(issue in fallback_issues for issue in audit_mid.get("issues", []))
+    if audit_mid["needs_heal"] and should_fallback and text_content:
+        fallback_html = _text_to_paragraphs(
+            text_content,
+            source_domain=source_domain,
+            byline=byline,
+        )
+        if fallback_html:
+            cleaned = fallback_html
+            actions.append("fallback_text_content")
+            if source_domain and "wsj.com" in source_domain.lower():
+                stripped = _strip_wsj_blocks(cleaned)
+                if stripped != cleaned:
+                    cleaned = stripped
+                    actions.append("strip_wsj_blocks_after_fallback")
+            stripped = _strip_paragraphs_by_patterns(cleaned)
+            if stripped != cleaned:
+                cleaned = stripped
+                actions.append("strip_junk_paragraphs_after_fallback")
+            stripped = _strip_small_blocks_by_patterns(cleaned)
+            if stripped != cleaned:
+                cleaned = stripped
+                actions.append("strip_small_blocks_after_fallback")
+            if source_domain and "wsj.com" in source_domain.lower():
+                stripped = _strip_link_heavy_blocks(cleaned, _WSJ_RELATED_MARKERS)
+                if stripped != cleaned:
+                    cleaned = stripped
+                    actions.append("strip_wsj_related_blocks_after_fallback")
+    audit_after = audit_content(cleaned, source_domain)
+    return cleaned, audit_before, audit_after, actions
 
 
 def _render_metadata(
@@ -368,20 +1264,29 @@ def build_issue_epub(
     toc_items = [front]
     spine_items = ["nav", front]
 
+    image_cache = {}
+
     for idx, chapter in enumerate(chapters, start=1):
         chapter_title = chapter["title"]
         if chapter_title.endswith(" - WSJ"):
             chapter_title = chapter_title[:-6]
         content_html = _normalize_scene_breaks(chapter["content_html"])
+        source_domain = (chapter.get("source_domain") or "").lower()
+        if "wsj.com" in source_domain:
+            content_html = _strip_wsj_blocks(content_html)
         content_looks_bad = _html_text_length(content_html) < MIN_CONTENT_TEXT_LEN
         if not content_looks_bad:
-            source_domain = (chapter.get("source_domain") or "").lower()
             if "wsj.com" in source_domain and _looks_like_css_dump(content_html):
                 content_looks_bad = True
         if content_looks_bad:
-            fallback_html = _text_to_paragraphs(chapter.get("text_content"))
+            fallback_html = _text_to_paragraphs(
+                chapter.get("text_content"),
+                source_domain=chapter.get("source_domain"),
+                byline=chapter.get("byline"),
+            )
             if fallback_html:
                 content_html = fallback_html
+        content_html = _extract_data_images(content_html, book, image_cache, idx)
         meta_html = _render_metadata(
             byline=chapter.get("byline"),
             excerpt=chapter.get("excerpt"),

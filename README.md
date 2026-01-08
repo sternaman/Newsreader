@@ -72,6 +72,28 @@ The issue EPUB is generated per Book per calendar day and updated with new chapt
 - From the Book page, click the **Download EPUB** link.
 - Direct download endpoint: `http://localhost:8000/download/{issue_id}.epub`
 
+## Send to Kindle (optional)
+
+The API container includes the `kindle-send` CLI for emailing EPUBs to your Kindle.
+
+1. Initialize the configuration (stores it at `/data/KindleConfig.json`):
+
+   ```bash
+   docker compose exec api kindle-send --config /data/KindleConfig.json send https://example.com
+   ```
+
+2. Use the **Send to Kindle** button on the Book page, or:
+
+   ```bash
+   curl -X POST http://localhost:8000/api/issues/{issue_id}/send
+   ```
+
+Optional environment variables:
+
+- `KINDLE_SEND_CONFIG` (default `/data/KindleConfig.json`)
+- `KINDLE_SEND_TIMEOUT` (seconds, default `120`)
+- `KINDLE_SEND_ARGS` (extra flags passed to `kindle-send`)
+
 ## API Quick Checks
 
 ```bash
@@ -82,6 +104,13 @@ curl http://localhost:8000/api/books
 
 - Reading time defaults to 230 WPM. Override with `READING_WPM` in the API container environment.
 - Scene breaks are normalized to a visible `* * *` marker when an article contains empty paragraphs, `<hr>`, or `***`.
+
+## Image Compression (optional)
+
+Embedded images are resized and compressed to keep EPUB sizes reasonable.
+
+- `IMAGE_MAX_DIM` (default `1400`): max width/height in pixels
+- `IMAGE_JPEG_QUALITY` (default `82`): JPEG re-encode quality (50-95)
 
 ## Crosspoint-reader Notes
 
