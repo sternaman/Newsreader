@@ -41,14 +41,20 @@ Firefox MV3 note:
 - Visit `http://localhost:8000` and create a Book.
 - Note the Book ID from the URL (e.g., `/books/1` -> Book ID `1`).
 
-## Capture a Reading List (Update Book)
+## Capture a Reading List (Preview + Update)
 
 1. Navigate to a page that contains links you want captured.
 2. Open the extension control panel (toolbar icon).
+   - Firefox panel includes preview/edit; Chrome popup is still one-click update.
 3. Enter Host URL (default `http://localhost:8000`) and Book ID.
    - If the host runs on another machine, set Host URL to `http://<host-ip>:8000`.
-4. Click **Update Book** to send a snapshot list to the host.
-   - Optional: enable **Bulk capture snapshot items** to auto-open and ingest each URL.
+   - Click **Save Settings** to store per-book preferences (bulk capture, mobile UA, front-page filter).
+4. Click **Preview List** to load the current list into the panel.
+   - Optional: enable **Front page only (filter)** to cut navigation/section links.
+   - Optional: edit titles/URLs or uncheck items you don’t want.
+5. Click **Save Snapshot** to send the list to the host.
+6. Optional: click **Bulk Capture Selected** to open each item and ingest content.
+   - **Bulk capture snapshot items** controls whether the bulk capture auto-builds the issue.
    - Firefox-only: enable **Use iPhone-style mobile view for WSJ capture** to force a mobile UA for WSJ list extraction and bulk capture.
 
 ## Capture an Article (Send Article)

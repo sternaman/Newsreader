@@ -177,6 +177,19 @@ const postJson = async (url, payload) => {
   return response.json();
 };
 
+const normalizeItems = (items) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .filter((item) => item && item.url)
+    .map((item) => ({
+      title: item.title || item.url,
+      url: item.url,
+      ts: item.ts || null
+    }));
+};
+
 const isWsjHost = (hostname) => hostname === "wsj.com" || hostname.endsWith(".wsj.com");
 const isBloombergHost = (hostname) =>
   hostname === "bloomberg.com" ||
@@ -484,7 +497,8 @@ const bulkCapture = async (items, config) => {
   return results;
 };
 
-const handleAction = async (action, config, shouldBulk) => {
+const handleAction = async (message) => {
+  const { action, config, bulkCapture: shouldBulk, items, buildIssue } = message || {};
   if (!action) {
     return {};
   }
@@ -499,11 +513,63 @@ const handleAction = async (action, config, shouldBulk) => {
       bulkCapture: Boolean(shouldBulk),
       useMobileUA: Boolean(config.useMobileUA)
     });
+    if (action === "saveSnapshot") {
+      const normalized = normalizeItems(items);
+      if (!normalized.length) {
+        return { error: "No items to save" };
+      }
+      await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, {
+        items: normalized
+      });
+      await writeLog("info", "Snapshot saved", { count: normalized.length });
+      return { status: `Snapshot saved (${normalized.length} items).` };
+    }
+
+    if (action === "bulkCaptureItems") {
+      const normalized = normalizeItems(items);
+      if (!normalized.length) {
+        return { error: "No items to capture" };
+      }
+      const results = await bulkCapture(normalized, config);
+      const okCount = results.filter((result) => result.status === "ok").length;
+      if (buildIssue && okCount > 0) {
+        try {
+          await postJson(`${config.host}/api/books/${config.bookId}/issue/build`, {});
+          await writeLog("info", "Issue built after bulk capture", {
+            count: results.length,
+            okCount
+          });
+          return {
+            status: `Bulk captured ${results.length} items (${okCount} ok). Issue built.`
+          };
+        } catch (error) {
+          await writeLog("error", "Issue build failed after bulk capture", { error: error.message });
+          return {
+            status: `Bulk captured ${results.length} items (${okCount} ok). Issue build failed: ${error.message}`
+          };
+        }
+      }
+      return {
+        status: `Bulk captured ${results.length} items (${okCount} ok). Issue not built.`
+      };
+    }
+
     const tab = await getPreferredContentTab();
     if (!tab) {
       return { error: "No active content tab. Open a site page and try again." };
     }
     await writeLog("info", "Using content tab", { tabId: tab.id, url: tab.url });
+
+    if (action === "previewList") {
+      await writeLog("info", "Preview list requested", {
+        tabId: tab.id,
+        url: tab.url,
+        useMobileUA: Boolean(config.useMobileUA)
+      });
+      const extracted = await extractListForUpdate(tab, config);
+      await writeLog("info", "Preview list extracted", { count: extracted.length });
+      return { items: extracted, sourceUrl: tab.url };
+    }
 
     if (action === "updateBook") {
       await writeLog("info", "Extracting list from tab", {
@@ -605,8 +671,7 @@ browser.runtime.onMessage.addListener((message) => {
   if (message?.type === "clearLogs") {
     return browser.storage.local.set({ [LOG_KEY]: [] }).then(() => ({ status: "ok" }));
   }
-  const { action, config, bulkCapture: shouldBulk } = message || {};
-  return handleAction(action, config, shouldBulk);
+  return handleAction(message || {});
 });
 
 const actionApi = browser.action || browser.browserAction;

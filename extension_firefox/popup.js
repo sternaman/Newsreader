@@ -3,15 +3,30 @@ const hostInput = document.getElementById("host");
 const bookInput = document.getElementById("bookId");
 const bulkCheckbox = document.getElementById("bulkCapture");
 const mobileCheckbox = document.getElementById("useMobileUA");
+const frontPageCheckbox = document.getElementById("frontPageOnly");
 const logsEl = document.getElementById("logs");
 const refreshLogsButton = document.getElementById("refreshLogs");
 const clearLogsButton = document.getElementById("clearLogs");
+const previewListEl = document.getElementById("previewList");
+const previewCountEl = document.getElementById("previewCount");
+const saveSnapshotButton = document.getElementById("saveSnapshot");
+const bulkCaptureSelectedButton = document.getElementById("bulkCaptureSelected");
+const selectAllButton = document.getElementById("selectAll");
+const selectNoneButton = document.getElementById("selectNone");
 
 const MAX_LOGS = 200;
+const MIN_TITLE_LENGTH = 8;
+
+let previewSourceItems = [];
+let previewItems = [];
 
 const setStatus = (msg) => {
   statusEl.textContent = msg;
   void writeLog("status", msg);
+};
+
+const setPreviewStatus = (msg) => {
+  previewCountEl.textContent = msg;
 };
 
 const logEntryToLine = (entry) => {
@@ -105,16 +120,13 @@ const getActiveTab = async () => {
   return tabs[0] || null;
 };
 
-const fallbackUpdateBook = async (config) => {
-  void writeLog("info", "Update book (fallback)", { bookId: config.bookId });
+const fallbackPreviewList = async () => {
   const tab = await getActiveTab();
   if (!tab) {
     throw new Error("No active tab");
   }
   const response = await browser.tabs.sendMessage(tab.id, { action: "extractList" });
-  const items = response?.items || [];
-  await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, { items });
-  return `Snapshot saved (${items.length} items).`;
+  return response?.items || [];
 };
 
 const fallbackSendArticle = async (config) => {
@@ -158,17 +170,12 @@ const fallbackBuildIssue = async (config) => {
   return "Issue build triggered.";
 };
 
-const callBackground = async (action, config, shouldBulk) => {
-  void writeLog("info", "Dispatch action", { action, bookId: config.bookId });
-  const response = await browser.runtime.sendMessage({
-    action,
-    config,
-    bulkCapture: shouldBulk
-  });
+const callBackground = async (payload) => {
+  const response = await browser.runtime.sendMessage(payload);
   if (response?.error) {
     throw new Error(response.error);
   }
-  return response?.status || "Done.";
+  return response;
 };
 
 const normalizeHost = (value) => {
@@ -182,11 +189,14 @@ const normalizeHost = (value) => {
   return trimmed.replace(/\/+$/, "");
 };
 
+const buildConfigKey = (host, bookId) => `${host}::${bookId}`;
+
 const readConfig = async () => {
+  const keys = ["host", "bookId", "bulkCapture", "useMobileUA", "frontPageOnly", "configByBook"];
   try {
-    return await browser.storage.sync.get(["host", "bookId", "bulkCapture", "useMobileUA"]);
+    return await browser.storage.sync.get(keys);
   } catch (error) {
-    return await browser.storage.local.get(["host", "bookId", "bulkCapture", "useMobileUA"]);
+    return await browser.storage.local.get(keys);
   }
 };
 
@@ -198,27 +208,364 @@ const writeConfig = async (config) => {
   }
 };
 
+const applyStoredSettings = (stored, hostValue, bookValue) => {
+  const configByBook = stored.configByBook || {};
+  const key = buildConfigKey(hostValue, bookValue);
+  const perBook = configByBook[key] || {};
+  const fallback = {
+    bulkCapture: stored.bulkCapture,
+    useMobileUA: stored.useMobileUA,
+    frontPageOnly: stored.frontPageOnly
+  };
+  const settings = { ...fallback, ...perBook };
+  bulkCheckbox.checked = Boolean(settings.bulkCapture);
+  mobileCheckbox.checked = Boolean(settings.useMobileUA);
+  frontPageCheckbox.checked = Boolean(settings.frontPageOnly);
+};
+
+const loadPerBookSettings = async () => {
+  const stored = await readConfig();
+  const hostValue = normalizeHost(hostInput.value) || stored.host || "http://localhost:8000";
+  const bookValue = bookInput.value.trim();
+  applyStoredSettings(stored, hostValue, bookValue);
+  resetPreview("No preview loaded.");
+};
+
 const loadConfig = async () => {
   try {
-    const config = await readConfig();
-    hostInput.value = config.host || "http://localhost:8000";
-    bookInput.value = config.bookId || "";
-    bulkCheckbox.checked = Boolean(config.bulkCapture);
-    mobileCheckbox.checked = Boolean(config.useMobileUA);
+    const stored = await readConfig();
+    const hostValue = normalizeHost(stored.host || hostInput.value || "http://localhost:8000");
+    const bookValue = stored.bookId || "";
+    hostInput.value = hostValue || "http://localhost:8000";
+    bookInput.value = bookValue;
+    applyStoredSettings(stored, hostValue, bookValue);
   } catch (error) {
     setStatus(error.message || String(error));
   }
 };
 
-const saveConfig = async () => {
-  try {
-    await writeConfig({
-      host: normalizeHost(hostInput.value),
-      bookId: bookInput.value.trim(),
+const persistConfig = async (config, stored) => {
+  const configByBook = stored.configByBook || {};
+  if (config.host && config.bookId) {
+    configByBook[buildConfigKey(config.host, config.bookId)] = {
+      bulkCapture: config.bulkCapture,
+      useMobileUA: config.useMobileUA,
+      frontPageOnly: config.frontPageOnly
+    };
+  }
+  await writeConfig({
+    host: config.host,
+    bookId: config.bookId,
+    bulkCapture: config.bulkCapture,
+    useMobileUA: config.useMobileUA,
+    frontPageOnly: config.frontPageOnly,
+    configByBook
+  });
+};
+
+const buildConfigFromInputs = async () => {
+  const stored = await readConfig();
+  const hostValue = normalizeHost(hostInput.value) || stored.host || "http://localhost:8000";
+  const bookValue = bookInput.value.trim() || stored.bookId || "";
+  return {
+    config: {
+      host: hostValue,
+      bookId: bookValue,
       bulkCapture: bulkCheckbox.checked,
-      useMobileUA: mobileCheckbox.checked
+      useMobileUA: mobileCheckbox.checked,
+      frontPageOnly: frontPageCheckbox.checked
+    },
+    stored
+  };
+};
+
+const normalizeItems = (items) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .filter((item) => item && item.url)
+    .map((item) => ({
+      title: (item.title || item.url || "").trim(),
+      url: item.url.trim(),
+      ts: item.ts || null
+    }))
+    .filter((item) => item.url && item.title.length >= MIN_TITLE_LENGTH);
+};
+
+const normalizeUrlKey = (value) => {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`.toLowerCase();
+  } catch (error) {
+    return value.toLowerCase();
+  }
+};
+
+const dedupeItems = (items) => {
+  const seen = new Set();
+  const deduped = [];
+  for (const item of items) {
+    const key = normalizeUrlKey(item.url);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
+};
+
+const isWsjFrontPageUrl = (url) => {
+  if (!url.hostname.endsWith("wsj.com")) {
+    return false;
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  const last = path.split("/").filter(Boolean).pop() || "";
+  if (!/-[0-9a-f]{8}$/i.test(last)) {
+    return false;
+  }
+  if (/\/(video|podcasts|livecoverage|live-coverage|journalcollection|buy-side)/i.test(path)) {
+    return false;
+  }
+  const mod = url.searchParams.get("mod");
+  if (mod && !/(hp|mhp)/i.test(mod)) {
+    return false;
+  }
+  return true;
+};
+
+const isBloombergFrontPageUrl = (url) => {
+  if (!/bloomberg\.com$|businessweek\.com$/i.test(url.hostname)) {
+    return false;
+  }
+  const path = url.pathname.toLowerCase();
+  if (/\/(video|podcast)/.test(path)) {
+    return false;
+  }
+  if (/\/news\/articles\/\d{4}-\d{2}-\d{2}\//.test(path)) {
+    return true;
+  }
+  if (/\/(features|graphics|articles)\//.test(path)) {
+    return true;
+  }
+  if (/\/news\/articles\//.test(path)) {
+    return true;
+  }
+  return false;
+};
+
+const isGenericFrontPageUrl = (url) => {
+  const segments = url.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) {
+    return false;
+  }
+  const last = segments[segments.length - 1] || "";
+  if (last.length < 12) {
+    return false;
+  }
+  if (!/[a-z]/i.test(last)) {
+    return false;
+  }
+  return true;
+};
+
+const applyFrontPageFilter = (items) => {
+  if (!frontPageCheckbox.checked) {
+    return items;
+  }
+  return items.filter((item) => {
+    try {
+      const url = new URL(item.url);
+      if (isWsjFrontPageUrl(url)) {
+        return true;
+      }
+      if (isBloombergFrontPageUrl(url)) {
+        return true;
+      }
+      return isGenericFrontPageUrl(url);
+    } catch (error) {
+      return false;
+    }
+  });
+};
+
+const buildPreviewItems = (items) =>
+  items.map((item, index) => ({
+    id: String(index),
+    title: item.title || item.url,
+    url: item.url,
+    ts: item.ts || null,
+    selected: true
+  }));
+
+const updatePreviewControls = () => {
+  const total = previewItems.length;
+  const selected = previewItems.filter((item) => item.selected).length;
+  if (!total) {
+    setPreviewStatus("No preview loaded.");
+  } else {
+    setPreviewStatus(`${selected}/${total} items selected`);
+  }
+  saveSnapshotButton.disabled = selected === 0;
+  bulkCaptureSelectedButton.disabled = selected === 0 || !bulkCheckbox.checked;
+};
+
+const renderPreview = () => {
+  previewListEl.innerHTML = "";
+  if (!previewItems.length) {
+    updatePreviewControls();
+    return;
+  }
+  for (const item of previewItems) {
+    const row = document.createElement("div");
+    row.className = "preview-item";
+    row.dataset.id = item.id;
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "preview-select";
+    checkbox.checked = item.selected;
+
+    const fields = document.createElement("div");
+    fields.className = "preview-fields";
+
+    const titleInput = document.createElement("input");
+    titleInput.type = "text";
+    titleInput.className = "preview-title";
+    titleInput.value = item.title;
+
+    const urlInput = document.createElement("input");
+    urlInput.type = "text";
+    urlInput.className = "preview-url";
+    urlInput.value = item.url;
+
+    fields.appendChild(titleInput);
+    fields.appendChild(urlInput);
+
+    row.appendChild(checkbox);
+    row.appendChild(fields);
+    previewListEl.appendChild(row);
+  }
+  updatePreviewControls();
+};
+
+const resetPreview = (message) => {
+  previewSourceItems = [];
+  previewItems = [];
+  previewListEl.innerHTML = "";
+  setPreviewStatus(message);
+  updatePreviewControls();
+};
+
+const applyFiltersAndRender = () => {
+  const filtered = applyFrontPageFilter(dedupeItems(previewSourceItems));
+  previewItems = buildPreviewItems(filtered);
+  renderPreview();
+};
+
+const getItemById = (id) => previewItems.find((item) => item.id === id);
+
+const getSelectedPreviewItems = () =>
+  previewItems.filter((item) => item.selected && item.url);
+
+const setAllSelections = (value) => {
+  previewItems.forEach((item) => {
+    item.selected = value;
+  });
+  previewListEl.querySelectorAll(".preview-select").forEach((el) => {
+    el.checked = value;
+  });
+  updatePreviewControls();
+};
+
+const previewUpdateBook = async () => {
+  const { config, stored } = await buildConfigFromInputs();
+  if (!config.bookId) {
+    setStatus("Set a Book ID first.");
+    return;
+  }
+  await persistConfig(config, stored);
+  setStatus("Loading preview...");
+  try {
+    const response = await callBackground({ action: "previewList", config });
+    const items = normalizeItems(response?.items || []);
+    previewSourceItems = items;
+    applyFiltersAndRender();
+    setStatus(`Preview loaded (${previewItems.length} items).`);
+  } catch (error) {
+    const message = error?.message || String(error);
+    const backgroundMissing =
+      /Receiving end does not exist/i.test(message) ||
+      /Could not establish connection/i.test(message);
+    if (backgroundMissing) {
+      try {
+        const items = normalizeItems(await fallbackPreviewList());
+        previewSourceItems = items;
+        applyFiltersAndRender();
+        setStatus("Preview loaded (background fallback). Mobile UA not applied.");
+        return;
+      } catch (fallbackError) {
+        setStatus(fallbackError.message || String(fallbackError));
+        return;
+      }
+    }
+    setStatus(message);
+  }
+};
+
+const saveSnapshotInternal = async (config, items) => {
+  if (!items.length) {
+    setStatus("Select at least one item.");
+    return false;
+  }
+  try {
+    const response = await callBackground({ action: "saveSnapshot", config, items });
+    setStatus(response?.status || "Snapshot saved.");
+    return true;
+  } catch (error) {
+    try {
+      await postJson(`${config.host}/api/books/${config.bookId}/snapshot`, { items });
+      setStatus(`Snapshot saved (${items.length} items).`);
+      return true;
+    } catch (fallbackError) {
+      setStatus(fallbackError.message || String(fallbackError));
+      return false;
+    }
+  }
+};
+
+const saveSnapshot = async () => {
+  const { config, stored } = await buildConfigFromInputs();
+  if (!config.bookId) {
+    setStatus("Set a Book ID first.");
+    return;
+  }
+  await persistConfig(config, stored);
+  const selected = getSelectedPreviewItems();
+  void saveSnapshotInternal(config, selected);
+};
+
+const bulkCaptureSelected = async () => {
+  const { config, stored } = await buildConfigFromInputs();
+  if (!config.bookId) {
+    setStatus("Set a Book ID first.");
+    return;
+  }
+  await persistConfig(config, stored);
+  const selected = getSelectedPreviewItems();
+  const saved = await saveSnapshotInternal(config, selected);
+  if (!saved) {
+    return;
+  }
+  try {
+    const response = await callBackground({
+      action: "bulkCaptureItems",
+      config,
+      items: selected,
+      buildIssue: bulkCheckbox.checked
     });
-    setStatus("Settings saved.");
+    setStatus(response?.status || "Bulk capture finished.");
   } catch (error) {
     setStatus(error.message || String(error));
   }
@@ -226,15 +573,12 @@ const saveConfig = async () => {
 
 const sendAction = async (action) => {
   let config;
+  let stored;
   try {
-    const stored = await readConfig();
-    config = {
-      host: normalizeHost(hostInput.value) || stored.host || "http://localhost:8000",
-      bookId: bookInput.value.trim() || stored.bookId || "",
-      bulkCapture: bulkCheckbox.checked,
-      useMobileUA: mobileCheckbox.checked
-    };
-    await writeConfig(config);
+    const result = await buildConfigFromInputs();
+    config = result.config;
+    stored = result.stored;
+    await persistConfig(config, stored);
   } catch (error) {
     setStatus(error.message || String(error));
     return;
@@ -259,20 +603,10 @@ const sendAction = async (action) => {
     return;
   }
 
-  const needsBackground =
-    (action === "updateBook" && (bulkCheckbox.checked || config.useMobileUA)) ||
-    (action === "sendArticle" && config.useMobileUA);
-
+  const needsBackground = action === "sendArticle" && config.useMobileUA;
   if (!needsBackground) {
     try {
-      let status;
-      if (action === "updateBook") {
-        status = await fallbackUpdateBook(config);
-      } else if (action === "sendArticle") {
-        status = await fallbackSendArticle(config);
-      } else {
-        status = await fallbackBuildIssue(config);
-      }
+      const status = await fallbackSendArticle(config);
       setStatus(status);
     } catch (error) {
       setStatus(error.message || String(error));
@@ -281,8 +615,8 @@ const sendAction = async (action) => {
   }
 
   try {
-    const status = await callBackground(action, config, bulkCheckbox.checked);
-    setStatus(status);
+    const response = await callBackground({ action, config, bulkCapture: bulkCheckbox.checked });
+    setStatus(response?.status || "Done.");
   } catch (error) {
     const message = error?.message || String(error);
     const backgroundMissing =
@@ -290,40 +624,91 @@ const sendAction = async (action) => {
       /Could not establish connection/i.test(message);
     if (backgroundMissing) {
       try {
-        if (action === "updateBook") {
-          let status = await fallbackUpdateBook(config);
-          if (bulkCheckbox.checked) {
-            status = `${status} Bulk capture skipped (background not ready).`;
-          }
-          if (config.useMobileUA) {
-            status = `${status} Mobile UA capture skipped (background not ready).`;
-          }
-          setStatus(status);
-          return;
-        }
-        if (action === "sendArticle") {
-          let status = await fallbackSendArticle(config);
-          if (config.useMobileUA) {
-            status = `${status} Mobile UA capture skipped (background not ready).`;
-          }
-          setStatus(status);
-          return;
-        }
+        const status = await fallbackSendArticle(config);
+        setStatus(`${status} Mobile UA capture skipped (background not ready).`);
+        return;
       } catch (fallbackError) {
         setStatus(fallbackError.message || String(fallbackError));
         return;
       }
-      setStatus("Background not ready. Reload the add-on and try again.");
-      return;
     }
     setStatus(message);
   }
 };
 
-document.getElementById("saveConfig").addEventListener("click", saveConfig);
-document.getElementById("updateBook").addEventListener("click", () => sendAction("updateBook"));
+previewListEl.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+  if (!target.classList.contains("preview-select")) {
+    return;
+  }
+  const row = target.closest(".preview-item");
+  const id = row?.dataset?.id;
+  if (!id) {
+    return;
+  }
+  const item = getItemById(id);
+  if (!item) {
+    return;
+  }
+  item.selected = target.checked;
+  updatePreviewControls();
+});
+
+previewListEl.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+  const row = target.closest(".preview-item");
+  const id = row?.dataset?.id;
+  if (!id) {
+    return;
+  }
+  const item = getItemById(id);
+  if (!item) {
+    return;
+  }
+  if (target.classList.contains("preview-title")) {
+    item.title = target.value;
+  } else if (target.classList.contains("preview-url")) {
+    item.url = target.value;
+  }
+});
+
+bulkCheckbox.addEventListener("change", updatePreviewControls);
+frontPageCheckbox.addEventListener("change", () => {
+  if (!previewSourceItems.length) {
+    return;
+  }
+  applyFiltersAndRender();
+});
+
+hostInput.addEventListener("change", loadPerBookSettings);
+bookInput.addEventListener("change", loadPerBookSettings);
+
+selectAllButton.addEventListener("click", () => setAllSelections(true));
+selectNoneButton.addEventListener("click", () => setAllSelections(false));
+
+saveSnapshotButton.addEventListener("click", saveSnapshot);
+bulkCaptureSelectedButton.addEventListener("click", bulkCaptureSelected);
+
+document.getElementById("saveConfig").addEventListener("click", async () => {
+  try {
+    const result = await buildConfigFromInputs();
+    await persistConfig(result.config, result.stored);
+    setStatus("Settings saved.");
+  } catch (error) {
+    setStatus(error.message || String(error));
+  }
+});
+
+document.getElementById("updateBook").addEventListener("click", previewUpdateBook);
 document.getElementById("sendArticle").addEventListener("click", () => sendAction("sendArticle"));
 document.getElementById("buildIssue").addEventListener("click", () => sendAction("buildIssue"));
+
 if (refreshLogsButton) {
   refreshLogsButton.addEventListener("click", loadLogs);
 }
@@ -331,5 +716,6 @@ if (clearLogsButton) {
   clearLogsButton.addEventListener("click", clearLogs);
 }
 
+resetPreview("No preview loaded.");
 loadConfig();
 void loadLogs();
