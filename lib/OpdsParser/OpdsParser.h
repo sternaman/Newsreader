@@ -21,6 +21,8 @@ struct OpdsEntry {
   std::string title;
   std::string author;  // Only for books
   std::string href;    // Navigation URL or epub download URL
+  std::string hrefEpub;
+  std::string hrefXtc;  // .xtc or .xtch (pre-rendered)
   std::string id;
 };
 

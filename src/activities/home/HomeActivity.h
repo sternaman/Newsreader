@@ -14,6 +14,7 @@ class HomeActivity final : public Activity {
   bool updateRequired = false;
   bool hasContinueReading = false;
   bool hasOpdsUrl = false;
+  bool hasNewsSync = false;
   bool hasCoverImage = false;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
@@ -26,6 +27,7 @@ class HomeActivity final : public Activity {
   const std::function<void()> onSettingsOpen;
   const std::function<void()> onFileTransferOpen;
   const std::function<void()> onOpdsBrowserOpen;
+  const std::function<void()> onNewsSyncOpen;
 
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
@@ -39,13 +41,15 @@ class HomeActivity final : public Activity {
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                         const std::function<void()>& onContinueReading, const std::function<void()>& onMyLibraryOpen,
                         const std::function<void()>& onSettingsOpen, const std::function<void()>& onFileTransferOpen,
-                        const std::function<void()>& onOpdsBrowserOpen)
+                        const std::function<void()>& onOpdsBrowserOpen,
+                        const std::function<void()>& onNewsSyncOpen)
       : Activity("Home", renderer, mappedInput),
         onContinueReading(onContinueReading),
         onMyLibraryOpen(onMyLibraryOpen),
         onSettingsOpen(onSettingsOpen),
         onFileTransferOpen(onFileTransferOpen),
-        onOpdsBrowserOpen(onOpdsBrowserOpen) {}
+        onOpdsBrowserOpen(onOpdsBrowserOpen),
+        onNewsSyncOpen(onNewsSyncOpen) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

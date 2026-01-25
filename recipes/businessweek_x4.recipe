@@ -1,0 +1,336 @@
+﻿#!/usr/bin/env python
+# vim:fileencoding=utf-8
+
+import json
+import time
+from datetime import datetime
+from html import escape
+
+from calibre.ebooks.BeautifulSoup import BeautifulSoup
+from calibre.web.feeds.news import BasicNewsRecipe, classes
+
+
+def safe_text(s):
+    return s or ''
+
+
+def _chapter_label(section, title):
+    section = safe_text(section).strip()
+    title = safe_text(title).strip()
+    if section and title:
+        return section + ' | ' + title
+    return title or section or 'Contents'
+
+
+def get_contents(x):
+    if x == '':
+        return ''
+    otype = x.get('role', '')
+    if otype == 'p':
+        return '<p>' + ''.join(map(get_contents, x.get('parts', ''))) + '</p>'
+    if otype == 'text':
+        if 'style' in x:
+            return '<' + x['style'] + '>' + ''.join(map(get_contents, x.get('parts', ''))) + '</' + x['style'] + '>'
+        return x.get('text', '') + ''.join(map(get_contents, x.get('parts', '')))
+    if otype == 'br':
+        return '<br>'
+    if otype == 'anchor':
+        return '<span>' + ''.join(map(get_contents, x.get('parts', ''))) + '</span>'
+    if otype == 'h3':
+        return '<h4>' + ''.join(map(get_contents, x.get('parts', ''))) + '</h4>'
+    if otype == 'ul':
+        return '<ul>' + ''.join(map(get_contents, x.get('parts', ''))) + '</ul>'
+    if otype == 'li':
+        return '<li>' + ''.join(map(get_contents, x.get('parts', ''))) + '</li>'
+    if otype == 'webview':
+        return '<br>' + x.get('html', '') + ''.join(map(get_contents, x.get('parts', '')))
+    if otype == 'blockquote':
+        return '<blockquote>' + ''.join(map(get_contents, x.get('parts', ''))) + '</blockquote>'
+    if otype in {'image', 'video'}:
+        img_urls = x.get('imageURLs') or {}
+        img_url = ''
+        if isinstance(img_urls, dict):
+            img_url = (
+                img_urls.get('default') or img_urls.get('medium') or img_urls.get('large') or
+                img_urls.get('small') or img_urls.get('thumb')
+            )
+        caption = safe_text(x.get('caption'))
+        credit = safe_text(x.get('credit'))
+        cap_text = (caption + (' ' + credit if credit else '')).strip()
+        cap_html = '<div class="img-cap">' + cap_text + '</div>' if cap_text else ''
+        if img_url:
+            return '<div class="img"><img src="{}"/>{}</div>'.format(img_url, cap_html)
+        if cap_text:
+            return '<p class="img">' + cap_text + '</p>'
+        return ''
+    if otype in {'correction', 'disclaimer'}:
+        return '<p class="corr">' + ''.join(map(get_contents, x.get('parts', ''))) + '</p>'
+    if not any(x == otype for x in ['', 'ad', 'inline-newsletter', 'tabularData']):
+        return '<i>' + ''.join(map(get_contents, x.get('parts', ''))) + '</i>'
+    return ''
+
+
+class BusinessweekX4(BasicNewsRecipe):
+    title = 'Bloomberg Businessweek (X4)'
+    language = 'en_US'
+    __author__ = 'local'
+    no_stylesheets = True
+    remove_attributes = ['style', 'height', 'width']
+    encoding = 'utf-8'
+    ignore_duplicate_articles = {'url'}
+    scale_news_images = (360, 480)
+    masthead_url = 'https://assets.bwbx.io/s3/javelin/public/hub/images/BW-Logo-Black-cc9035fbb3.svg'
+    description = (
+        'Bloomberg Businessweek helps global leaders stay ahead with insights and in-depth analysis on the people,'
+        " companies, events, and trends shaping today's complex, global economy."
+    )
+    remove_empty_feeds = True
+
+    recipe_specific_options = {
+        'issue': {
+            'short': 'The ID of the edition to download (YY_XX format)',
+            'long': 'For example, 24_17\nHint: Edition ID can be found at the end of its URL'
+        }
+    }
+
+    remove_tags = [
+        dict(name=['button', 'svg', 'meta', 'iframe']),
+        dict(name='div', attrs={'id': ['bb-that', 'bb-nav']}),
+        dict(attrs={'data-image-type': 'audio'}),
+        classes('twitter-logo bb-global-footer __sticky__audio__bar__portal__ css--social-wrapper-outer bplayer-container')
+    ]
+
+    extra_css = '''
+        body { font-family: Bookerly, serif; }
+        .auth { font-size:small; font-weight:bold; }
+        .subhead, .cap span { font-style:italic; color:#202020; }
+        em, blockquote { color:#202020; }
+        .cat { font-size:small; color:gray; }
+        img { display:block; margin:0.6em auto; max-width:75%; max-height:45%; width:auto; height:auto; }
+        .img, .img-cap, .news-figure-caption-text { font-size:small; text-align:center; }
+        .corr { font-size:small; font-style:italic; color:#404040; }
+        .chart { font-size:small; }
+        .news-figure-credit {font-size:small; text-align:center; color:#202020;}
+        .article { page-break-after: always; }
+        .toc-page { page-break-after: always; }
+        .toc-section-title { font-size:80%; font-weight:bold; letter-spacing:0.04em; text-transform:uppercase; color:#404040; margin-top:0.8em; }
+        .toc-list { margin:0.2em 0 0.6em 1.2em; padding:0; }
+        .toc-list li { margin:0.1em 0; }
+        .x4-chap-marker { font-size:1px; line-height:1px; color:#ffffff; margin:0; padding:0; }
+    '''
+
+    def parse_index(self):
+        inx = 'https://cdn-mobapi.bloomberg.com'
+        sec = self.index_to_soup(inx + '/wssmobile/v1/bw/news/list?limit=1', raw=True)
+        issue_id = json.loads(sec).get('magazines', [{}])[0].get('id')
+        past_edition = self.recipe_specific_options.get('issue')
+        if past_edition and isinstance(past_edition, str):
+            issue_id = past_edition
+        edit = self.index_to_soup(inx + '/wssmobile/v1/bw/news/week/' + issue_id, raw=True)
+        d = json.loads(edit)
+        self.timefmt = ' [' + d.get('date', '') + ']'
+        cover = d.get('image', {}).get('thumbUrl')
+        if cover:
+            self.cover_url = cover
+
+        feeds = []
+        for module in d.get('modules', []):
+            section = module.get('title') or 'News'
+            articles = []
+            for x in module.get('articles', []) or []:
+                title = safe_text(x.get('title')).strip()
+                if not title:
+                    continue
+                url = inx + '/wssmobile/v1/stories/' + x.get('id', '')
+                articles.append({'title': title, 'url': url})
+            if articles:
+                feeds.append((section, articles))
+        return feeds
+
+    def feeds2index(self, feeds):
+        toc_entries = []
+        for idx, feed in enumerate(feeds):
+            section = safe_text(getattr(feed, 'title', '')).strip()
+            articles = getattr(feed, 'articles', [])
+            titles = []
+            for article in articles:
+                title = safe_text(getattr(article, 'title', '')).strip()
+                if title:
+                    titles.append(title)
+            toc_entries.append((idx, section or 'News', titles))
+        return self._render_toc_html(toc_entries)
+
+    def _render_toc_html(self, sections):
+        css = (getattr(self, 'template_css', '') or '') + '\n' + (self.get_extra_css() or '')
+        parts = [
+            '<html><head><title>Contents</title>',
+            '<style type="text/css">' + css + '</style>',
+            '</head>',
+            '<body class="toc-page"><h1>Contents</h1>',
+            '<div class="x4-chap-marker">X4CHAP::Contents</div>',
+        ]
+        for feed_idx, section, titles in sections:
+            sec = escape(safe_text(section).strip())
+            if not sec:
+                continue
+            parts.append('<div class="toc-section" id="feed_' + str(feed_idx) + '">')
+            parts.append('<div class="toc-section-title">' + sec + '</div>')
+            if titles:
+                parts.append('<ul class="toc-list">')
+                for title in titles:
+                    parts.append('<li>' + escape(title) + '</li>')
+                parts.append('</ul>')
+            parts.append('</div>')
+        parts.append('</body></html>')
+        return ''.join(parts).encode('utf-8')
+
+    def preprocess_raw_html(self, raw, url):
+        data = json.loads(raw)
+
+        article_title = safe_text(data.get('title'))
+        title = '<h1 title="{}">'.format(data.get('longURL', '')) + article_title + '</h1>'
+
+        cat = subhead = lede = auth = caption = ''
+        chap_marker = '<div class="x4-chap-marker">X4CHAP::' + escape(_chapter_label(data.get('primaryCategory'), article_title)) + '</div>'
+
+        if data.get('primaryCategory'):
+            cat = '<div class="cat">' + data['primaryCategory'] + '</div>'
+
+        if data.get('abstract'):
+            subhead = '<div class="subhead"><ul><li>' + '</li><li>'.join(list(data['abstract'])) + '</li></ul></div>'
+        elif data.get('summary'):
+            subhead = '<div class="subhead"><p>' + data['summary'] + '</p></div>'
+
+        if data.get('byline'):
+            dt = datetime.fromtimestamp(data['updatedAt'] + time.timezone)
+            auth = '<p class="auth">By ' + data['byline'] + ' | Updated on ' + dt.strftime('%b %d, %Y at %I:%M %p') + '</p>'
+
+        body = ''
+        if data.get('type', '') == 'interactive':
+            body += '<p><em>This is an interactive article, which is supposed to be read in a browser.</em></p>'
+
+        bw_html = ''
+        try:
+            b_data = self.index_to_soup('https://cdn-mobapi.bloomberg.com/wssmobile/v1/bw/news/stories/' + url.split('/')[-1], raw=True)
+            bw_html = json.loads(b_data).get('html', '')
+        except Exception:
+            bw_html = ''
+
+        if bw_html:
+            body += bw_html
+        else:
+            for x in data.get('components') or []:
+                body += get_contents(x)
+
+        if data.get('ledeImage') is not None:
+            x = data['ledeImage']
+            img_urls = x.get('imageURLs') or {}
+            img_url = ''
+            if isinstance(img_urls, dict):
+                img_url = (
+                    img_urls.get('default') or img_urls.get('medium') or img_urls.get('large') or
+                    img_urls.get('small') or img_urls.get('thumb')
+                )
+            if img_url and img_url.rsplit('/', 1)[0] not in body:
+                caption_text = safe_text(x.get('caption'))
+                credit_text = safe_text(x.get('credit'))
+                cap_text = (caption_text + (' ' + credit_text if credit_text else '')).strip()
+                cap_html = '<div class="img-cap">' + cap_text + '</div>' if cap_text else ''
+                lede = '<div class="img"><img src="{}"/>{}</div>'.format(img_url, cap_html)
+
+        html = (
+            '<html><body><div class="article">'
+            + chap_marker + cat + title + subhead + auth + lede + caption + '<div>' + body + '</div>'
+            + '</div></body></html>'
+        )
+        return BeautifulSoup(html).prettify()
+
+    def preprocess_html(self, soup):
+        for h3 in soup.findAll(['h2', 'h3']):
+            h3.name = 'h4'
+        for icon in soup.findAll('img', attrs={'class': 'video-player__play-icon'}):
+            icon.decompose()
+        for div in soup.findAll('div', attrs={'class': 'chart'}):
+            nos = div.find('noscript')
+            if nos:
+                nos.name = 'span'
+        for img in soup.findAll('img', attrs={'data-native-src': True}):
+            if 'videos' not in img['data-native-src']:
+                img['src'] = img['data-native-src']
+            else:
+                img['src'] = ''
+        for img in soup.findAll('img', attrs={'src': lambda x: x and x.endswith(('-1x-1.jpg', '-1x-1.png'))}):
+            img['src'] = img['src'].replace('-1x-1', '750x-1')
+
+        def normalize_src(src):
+            if not src:
+                return ''
+            clean = src.split('?', 1)[0].split('#', 1)[0]
+            parts = clean.rsplit('/', 1)
+            if len(parts) == 2:
+                base = parts[1]
+                if '.' in base:
+                    name, ext = base.rsplit('.', 1)
+                    if name.replace('x', '').replace('-', '').isdigit() and 'x' in name:
+                        clean = parts[0] + '/_img_.' + ext
+            return clean
+
+        seen = set()
+        for img in soup.findAll('img'):
+            src = img.get('src', '')
+            key = normalize_src(src)
+            if key in seen:
+                img.decompose()
+            else:
+                seen.add(key)
+
+        for img in soup.findAll('img'):
+            if not img.get('src'):
+                img.decompose()
+
+        return soup
+
+    def postprocess_html(self, soup, first):
+        for link in soup.findAll('a', attrs={'rel': 'calibre-downloaded-from'}):
+            parent = link.find_parent('p')
+            if parent:
+                parent.decompose()
+            else:
+                link.decompose()
+
+        for link in list(soup.findAll('a')):
+            if link.get('rel') == 'calibre-downloaded-from':
+                continue
+            if link.contents:
+                link.unwrap()
+            else:
+                link.decompose()
+        return soup
+
+    def internal_postprocess_book(self, oeb, opts, log):
+        super(BusinessweekX4, self).internal_postprocess_book(oeb, opts, log)
+        for item in oeb.spine:
+            try:
+                nodes = item.data.xpath('//*[local-name()="p"][descendant::*[@rel="calibre-downloaded-from"]]')
+            except Exception:
+                continue
+            for p in nodes:
+                parent = p.getparent()
+                if parent is not None:
+                    parent.remove(p)
+        for item in oeb.spine:
+            try:
+                navs = item.data.xpath(
+                    '//*[local-name()="div"][contains(concat(" ", normalize-space(@class), " "), " calibre_navbar")]'
+                )
+            except Exception:
+                continue
+            for div in navs:
+                parent = div.getparent()
+                if parent is not None:
+                    parent.remove(div)
+
+    def populate_article_metadata(self, article, soup, first):
+        h1 = soup.find('h1')
+        if h1 and h1.get('title'):
+            article.url = h1['title']

@@ -1,0 +1,19 @@
+﻿services:
+  nytrss:
+    build: .
+    working_dir: /data
+    volumes:
+      - ./data:/data
+    environment:
+      - NYTRSS_COOKIE_FILE=/data/nyt_cookies.txt
+      - NYTRSS_COOKIE=
+
+  web:
+    image: nginx:alpine
+    depends_on:
+      - nytrss
+    ports:
+      - "8000:80"
+    volumes:
+      - ./data/build:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

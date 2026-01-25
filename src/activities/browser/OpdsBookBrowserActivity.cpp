@@ -4,6 +4,7 @@
 #include <GfxRenderer.h>
 #include <HardwareSerial.h>
 #include <OpdsStream.h>
+#include <Xtc.h>
 #include <WiFi.h>
 
 #include "CrossPointSettings.h"
@@ -340,15 +341,22 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   downloadTotal = 0;
   updateRequired = true;
 
+  const std::string downloadHref = !book.hrefXtc.empty() ? book.hrefXtc : book.href;
   // Build full download URL
-  std::string downloadUrl = UrlUtils::buildUrl(SETTINGS.opdsServerUrl, book.href);
+  std::string downloadUrl = UrlUtils::buildUrl(SETTINGS.opdsServerUrl, downloadHref);
 
-  // Create sanitized filename: "Title - Author.epub" or just "Title.epub" if no author
+  // Create sanitized filename: "Title - Author.ext" or just "Title.ext" if no author
   std::string baseName = book.title;
   if (!book.author.empty()) {
     baseName += " - " + book.author;
   }
-  std::string filename = "/" + StringUtils::sanitizeFilename(baseName) + ".epub";
+  std::string extension = ".epub";
+  if (StringUtils::checkFileExtension(downloadHref, ".xtch")) {
+    extension = ".xtch";
+  } else if (StringUtils::checkFileExtension(downloadHref, ".xtc")) {
+    extension = ".xtc";
+  }
+  std::string filename = "/" + StringUtils::sanitizeFilename(baseName) + extension;
 
   Serial.printf("[%lu] [OPDS] Downloading: %s -> %s\n", millis(), downloadUrl.c_str(), filename.c_str());
 
@@ -363,8 +371,13 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
     Serial.printf("[%lu] [OPDS] Download complete: %s\n", millis(), filename.c_str());
 
     // Invalidate any existing cache for this file to prevent stale metadata issues
-    Epub epub(filename, "/.crosspoint");
-    epub.clearCache();
+    if (extension == ".xtch" || extension == ".xtc") {
+      Xtc xtc(filename, "/.crosspoint");
+      xtc.clearCache();
+    } else {
+      Epub epub(filename, "/.crosspoint");
+      epub.clearCache();
+    }
     Serial.printf("[%lu] [OPDS] Cleared cache for: %s\n", millis(), filename.c_str());
 
     state = BrowserState::BROWSING;

@@ -1,0 +1,523 @@
+#!/usr/bin/env python
+# vim:fileencoding=utf-8
+# License: GPLv3 Copyright: 2018, Kovid Goyal <kovid at kovidgoyal.net>
+
+import datetime
+import json
+import os
+import re
+from urllib.request import HTTPCookieProcessor, Request, build_opener
+from pprint import pprint
+from html import escape
+from http.cookiejar import MozillaCookieJar
+
+from calibre import strftime
+from calibre.ebooks.BeautifulSoup import BeautifulSoup, Tag
+from calibre.utils.date import strptime
+from calibre.web.feeds.news import BasicNewsRecipe
+from polyglot.functools import lru_cache
+
+is_web_edition = False
+use_wayback_machine = False
+
+# This is an Apollo persisted query hash which you can get
+# from looking at the XHR requests made by: https://www.nytimes.com/section/todayspaper
+# or by https://www.nytimes.com/section/world
+persistedQuery = '1f99120a11e94dd62a9474f68ee1255537ee3cf7eac20a0377819edb2fa1fef7'
+
+# The sections to download when downloading the web edition, comment out
+# the section you are not interested in
+web_sections = [
+    'world',
+    'us',
+    'politics',
+    'nyregion',
+    'business',
+    'technology',
+    'sports',
+    'science',
+    'health',
+    'opinion',
+    'arts',
+    'books',
+    'movies',
+    'arts/music',
+    'arts/television',
+    'style',
+    'food',
+    'fashion',
+    'travel',
+    'education',
+    'multimedia',
+    'obituaries',
+    'magazine',
+]
+# web_sections = [ 'business' ]
+url_date_pat = re.compile(r'/(2\d\d\d)/(\d\d)/(\d\d)/')
+
+
+def date_from_url(url):
+    m = url_date_pat.search(url)
+    if m is not None:
+        return datetime.date(*map(int, m.groups()))
+
+
+def format_date(d):
+    try:
+        return strftime(' [%a, %d %b %Y]', d)
+    except Exception:
+        return strftime(' [%Y/%m/%d]', d)
+
+
+def classes(classes):
+    q = frozenset(classes.split(' '))
+    return dict(attrs={
+        'class': lambda x: x and frozenset(x.split()).intersection(q)})
+
+
+def new_tag(soup, name, attrs=()):
+    impl = getattr(soup, 'new_tag', None)
+    if impl is not None:
+        return impl(name, attrs=dict(attrs))
+    return Tag(soup, name, attrs=attrs or None)
+
+
+def absolutize_href(href):
+    if not href.startswith('http'):
+        href = 'https://www.nytimes.com/' + href.lstrip('/')
+    return href
+
+
+def safe_text(s):
+    return s or ''
+
+
+def _chapter_label(section, title):
+    section = safe_text(section).strip()
+    title = safe_text(title).strip()
+    if section and title:
+        return section + ' | ' + title
+    return title or section or 'Contents'
+
+
+def _wrap_article(soup):
+    body = soup.find('body')
+    if not body:
+        return None
+    wrapper = body.find('div', attrs={'class': 'article'})
+    if wrapper:
+        return wrapper
+    wrapper = soup.new_tag('div', attrs={'class': 'article'})
+    for child in list(body.contents):
+        wrapper.append(child.extract())
+    body.append(wrapper)
+    return wrapper
+
+
+def _insert_chap_marker(soup, wrapper, label):
+    if not wrapper:
+        return
+    marker = soup.new_tag('div', attrs={'class': 'x4-chap-marker'})
+    marker.string = 'X4CHAP::' + label
+    wrapper.insert(0, marker)
+
+
+@lru_cache(2)
+def parser_module():
+    from calibre.live import load_module
+    return load_module('calibre.web.site_parsers.nytimes')
+
+
+class NewYorkTimes(BasicNewsRecipe):
+    if is_web_edition:
+        title = 'The New York Times (Web, X4)'
+        description = (
+            'New York Times (Web). You can edit the recipe to remove sections you are not interested in. '
+            'Use advanced menu to make changes to fetch Todays Paper'
+        )
+    else:
+        title = 'The New York Times (X4)'
+        description = (
+            'New York Times. Todays Paper '
+            'Use advanced menu to make changes to fetch Web Edition'
+        )
+    encoding = 'utf-8'
+    __author__ = 'Kovid Goyal'
+    language = 'en_US'
+    ignore_duplicate_articles = {'title', 'url'}
+    no_stylesheets = True
+    oldest_web_edition_article = 7  # days
+    scale_news_images = (360, 480)
+    articles_are_obfuscated = True
+    simultaneous_downloads = 3
+
+    extra_css = '''
+        body { font-family: Bookerly, serif; }
+        .byl, .time { font-size:small; color:#202020; }
+        .cap { font-size:small; text-align:center; }
+        .cred { font-style:italic; font-size:small; }
+        em, blockquote { color: #202020; }
+        .sc { font-variant: small-caps; }
+        .lbl { font-size:small; color:#404040; }
+        img { display:block; margin:0.6em auto; max-width:75%; max-height:45%; width:auto; height:auto; }
+        .article { page-break-after: always; }
+        .toc-page { page-break-after: always; }
+        .toc-section-title { font-size:80%; font-weight:bold; letter-spacing:0.04em; text-transform:uppercase; color:#404040; margin-top:0.8em; }
+        .toc-list { margin:0.2em 0 0.6em 1.2em; padding:0; }
+        .toc-list li { margin:0.1em 0; }
+        .x4-chap-marker { font-size:1px; line-height:1px; color:#ffffff; margin:0; padding:0; }
+    '''
+
+    @property
+    def nyt_parser(self):
+        return parser_module()
+
+    def get_nyt_page(self, url, skip_wayback=False):
+        if use_wayback_machine and not skip_wayback:
+            from calibre import browser
+            return self.nyt_parser.download_url(url, browser())
+        return self.index_to_soup(url, raw=True)
+
+    def preprocess_raw_html(self, raw_html, url):
+        if isinstance(raw_html, (bytes, bytearray)):
+            soup = BeautifulSoup(raw_html)
+        else:
+            soup = BeautifulSoup(raw_html or '')
+        return self.nyt_parser.extract_html(soup, url)
+
+    def get_obfuscated_article(self, url):
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+            ),
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'identity',
+        }
+        req = Request(url, headers=headers)
+        if self._cookie_jar:
+            opener = build_opener(HTTPCookieProcessor(self._cookie_jar))
+        else:
+            opener = build_opener()
+        with opener.open(req, timeout=getattr(self, 'timeout', 20)) as resp:
+            raw = resp.read()
+        return {'data': raw, 'url': url}
+
+    recipe_specific_options = {
+        'web': {
+            'short': 'Type in yes, if you want ' + ('Todays Paper' if is_web_edition else 'Web Edition'),
+            'default': 'Web Edition' if is_web_edition else 'Todays Paper',
+        },
+        'days': {
+            'short': 'Oldest article to download from this news source. In days ',
+            'long': 'For example, 1, gives you articles from the past 24 hours\n(Works only for Web_Edition)',
+            'default': str(oldest_web_edition_article)
+        },
+        'date': {
+            'short': 'The date of the edition to download (YYYY/MM/DD format)\nUsed to fetch past editions of NYT newspaper',
+            'long': 'For example, 2024/07/16'
+        },
+        'res': {
+            'short': (
+                'For hi-res images, select a resolution from the following\noptions: '
+                'popup, jumbo, mobileMasterAt3x, superJumbo'
+            ),
+            'long': (
+                'This is useful for non e-ink devices, and for a lower file size\nthan '
+                'the default, use mediumThreeByTwo440, mediumThreeByTwo225, articleInline.'
+            ),
+        },
+        'comp': {
+            'short': 'Compress News Images?',
+            'long': 'enter yes',
+            'default': 'no'
+        },
+        'cookie_file': {
+            'short': 'Path to Netscape cookies.txt for nytimes.com (optional)',
+            'long': 'Export cookies from your browser and point this to the file',
+            'default': ''
+        }
+    }
+
+    def __init__(self, *args, **kwargs):
+        BasicNewsRecipe.__init__(self, *args, **kwargs)
+        c = self.recipe_specific_options.get('comp')
+        d = self.recipe_specific_options.get('days')
+        w = self.recipe_specific_options.get('web')
+        self.is_web_edition = is_web_edition
+        self.section_by_url = {}
+        self._cookie_jar = None
+        if w and isinstance(w, str):
+            if w == 'yes':
+                self.is_web_edition = not is_web_edition
+        if d and isinstance(d, str):
+            self.oldest_web_edition_article = float(d)
+        if c and isinstance(c, str):
+            if c.lower() == 'yes':
+                self.compress_news_images = True
+        cookie_file = self.recipe_specific_options.get('cookie_file')
+        if cookie_file and isinstance(cookie_file, str) and os.path.exists(cookie_file):
+            jar = MozillaCookieJar(cookie_file)
+            try:
+                jar.load(ignore_discard=True, ignore_expires=True)
+                self._cookie_jar = jar
+            except Exception:
+                self._cookie_jar = None
+
+    def todays_paper_url(self):
+        pdate = self.recipe_specific_options.get('date')
+        if pdate and isinstance(pdate, str):
+            return 'https://www.nytimes.com/issue/todayspaper/{}/todays-new-york-times'.format(pdate)
+        return 'https://www.nytimes.com/section/todayspaper'
+
+    def parse_todays_page(self):
+        url = self.todays_paper_url()
+        soup = self.index_to_soup(url)
+        return parse_todays_page(soup)
+
+    def parse_web_sections(self):
+        feeds = []
+        for slug in web_sections:
+            url = 'https://www.nytimes.com/section/' + slug
+            self.log('Download section index:', url)
+            soup = self.index_to_soup(url)
+            # with open('/t/raw.html', 'w') as f:
+            #     f.write(str(soup))
+            section_title, articles = parse_web_section(soup)
+            self.log('Section:', section_title)
+            if articles:
+                feeds.append((section_title, articles))
+                for a in articles:
+                    self.log('\t', a['title'], a['url'])
+            else:
+                self.log('  No articles found in section:', section_title)
+            if self.test and len(feeds) >= self.test[0]:
+                break
+        return feeds
+
+    def parse_index(self):
+        # return [('All articles', [
+        #     {'title': 'XXXXX', 'url': 'https://www.nytimes.com/2020/11/27/world/americas/coronavirus-migrants-venezuela.html'},
+        # ])]
+        date, feeds = self.parse_todays_page()
+        pdate = date.strftime('%Y/%m/%d')
+        self.cover_url = 'https://static01.nyt.com/images/{}/nytfrontpage/scan.jpg'.format(pdate)
+        self.timefmt = strftime(' [%d %b, %Y]', date)
+        if self.is_web_edition:
+            feeds = self.parse_web_sections()
+        for s, articles in feeds:
+            self.log('Section:', s)
+            for a in articles:
+                self.log('\t', a['title'], a['url'])
+                url = a.get('url')
+                if url:
+                    self.section_by_url[url] = s
+        return feeds
+
+    def feeds2index(self, feeds):
+        toc_entries = []
+        for idx, feed in enumerate(feeds):
+            section = safe_text(getattr(feed, 'title', '')).strip()
+            articles = getattr(feed, 'articles', [])
+            titles = []
+            for article in articles:
+                title = safe_text(getattr(article, 'title', '')).strip()
+                if title:
+                    titles.append(title)
+            toc_entries.append((idx, section or 'News', titles))
+        return self._render_toc_html(toc_entries)
+
+    def _render_toc_html(self, sections):
+        css = (getattr(self, 'template_css', '') or '') + '\n' + (self.get_extra_css() or '')
+        parts = [
+            '<html><head><title>Contents</title>',
+            '<style type="text/css">' + css + '</style>',
+            '</head>',
+            '<body class="toc-page"><h1>Contents</h1>',
+            '<div class="x4-chap-marker">X4CHAP::Contents</div>',
+        ]
+        for feed_idx, section, titles in sections:
+            sec = escape(safe_text(section).strip())
+            if not sec:
+                continue
+            parts.append('<div class="toc-section" id="feed_' + str(feed_idx) + '">')
+            parts.append('<div class="toc-section-title">' + sec + '</div>')
+            if titles:
+                parts.append('<ul class="toc-list">')
+                for title in titles:
+                    parts.append('<li>' + escape(title) + '</li>')
+                parts.append('</ul>')
+            parts.append('</div>')
+        parts.append('</body></html>')
+        return ''.join(parts).encode('utf-8')
+
+    def get_browser(self, *args, **kwargs):
+        kwargs['user_agent'] = (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+        )
+        br = BasicNewsRecipe.get_browser(self, *args, **kwargs)
+        br.addheaders += [('Accept-Language', 'en-US,en;q=0.9')]
+        cookie_file = self.recipe_specific_options.get('cookie_file')
+        if cookie_file and isinstance(cookie_file, str) and os.path.exists(cookie_file):
+            jar = MozillaCookieJar(cookie_file)
+            try:
+                jar.load(ignore_discard=True, ignore_expires=True)
+                br.set_cookiejar(jar)
+            except Exception:
+                pass
+        return br
+
+    def preprocess_html(self, soup):
+        w = self.recipe_specific_options.get('res')
+        if w and isinstance(w, str):
+            res = '-' + w
+            for img in soup.findAll('img', attrs={'src':True}):
+                if '-article' in img['src']:
+                    ext = img['src'].split('?')[0].split('.')[-1]
+                    img['src'] = img['src'].rsplit('-article', 1)[0] + res + '.' + ext
+        for c in soup.findAll('div', attrs={'class':'cap'}):
+            for p in c.findAll(['p', 'div']):
+                p.name = 'span'
+        return soup
+
+    def get_article_url(self, article):
+        url = BasicNewsRecipe.get_article_url(self, article)
+        if not re.search(r'/video/|/athletic/|/card/', url):
+            return url
+        self.log('\tSkipping ', url)
+
+    def postprocess_html(self, soup, first_fetch):
+        for link in soup.findAll('a', attrs={'rel': 'calibre-downloaded-from'}):
+            parent = link.find_parent('p')
+            if parent:
+                parent.decompose()
+            else:
+                link.decompose()
+
+        for link in list(soup.findAll('a')):
+            if link.get('rel') == 'calibre-downloaded-from':
+                continue
+            if link.contents:
+                link.unwrap()
+            else:
+                link.decompose()
+        return soup
+
+    def internal_postprocess_book(self, oeb, opts, log):
+        super(NewYorkTimes, self).internal_postprocess_book(oeb, opts, log)
+        for item in oeb.spine:
+            try:
+                nodes = item.data.xpath('//*[local-name()="p"][descendant::*[@rel="calibre-downloaded-from"]]')
+            except Exception:
+                continue
+            for p in nodes:
+                parent = p.getparent()
+                if parent is not None:
+                    parent.remove(p)
+        for item in oeb.spine:
+            try:
+                navs = item.data.xpath(
+                    '//*[local-name()="div"][contains(concat(" ", normalize-space(@class), " "), " calibre_navbar")]'
+                )
+            except Exception:
+                continue
+            for div in navs:
+                parent = div.getparent()
+                if parent is not None:
+                    parent.remove(div)
+
+    def populate_article_metadata(self, article, soup, first):
+        wrapper = _wrap_article(soup)
+        h1 = soup.find('h1')
+        title = ''
+        if h1:
+            title = self.tag_to_string(h1).strip()
+        if not title:
+            title = safe_text(getattr(article, 'title', '')).strip()
+        url = getattr(article, 'url', '')
+        section = self.section_by_url.get(url, '')
+        label = _chapter_label(section, title)
+        _insert_chap_marker(soup, wrapper, label)
+
+
+def preloaded_data(soup):
+    candidates = soup.find_all('script', string=lambda x: x and 'window.__preloadedData' in x)
+    script = candidates[0]
+    script = str(script)
+    raw = script[script.find('{') : script.rfind(';')].strip().rstrip(';')  # }
+    raw = parser_module().clean_js_json(raw)
+    # with open('/t/raw.json', 'w') as f:
+    #     f.write(raw)
+    return json.JSONDecoder(strict=False).raw_decode(raw)[0]['initialState']
+
+
+def asset_to_article(asset):
+    title = asset['headline']['default']
+    return {'title': title, 'url': asset['url'], 'description': asset['summary']}
+
+
+def parse_web_section(soup):
+    data = preloaded_data(soup)
+    article_map = {}
+    for k, v in data.items():
+        if v['__typename'] == 'Article':
+            article_map[k] = asset_to_article(v)
+    articles = []
+    for k, v in data['ROOT_QUERY'].items():
+        if k.startswith('workOrLocation'):
+            c = data[v['__ref']]
+            section_title = c['name']
+            for k, v in c['collectionsPage'].items():
+                if k.startswith('stream'):
+                    for k, v in v.items():
+                        if k.startswith('edges'):
+                            for q in v:
+                                r = q['node']['__ref']
+                                if r.startswith('Article:'):
+                                    articles.append(article_map[r])
+            if not articles:
+                for c in c['collectionsPage']['embeddedCollections']:
+                    for e in c['stream']['edges']:
+                        for k, v in e.items():
+                            if k.startswith('node'):
+                                articles.append(article_map[v['__ref']])
+    return section_title, articles
+
+
+def parse_todays_page(soup):
+    m = soup.find('meta', attrs={'name':'nyt-collection:uri'})['content'].split('/')
+    pdate = strptime('{}/{}/{}'.format(*m[-4:-1]), '%Y/%m/%d', assume_utc=False, as_utc=False)
+    article_map = {}
+    data = preloaded_data(soup)
+    for k, v in data.items():
+        if v['__typename'] == 'Article':
+            article_map[k] = asset_to_article(v)
+    feeds = []
+    for k, v in data['ROOT_QUERY'].items():
+        if k.startswith('workOrLocation'):
+            for g in data[v['__ref']]['groupings']:
+                for c in g['containers']:
+                    articles = []
+                    for r in c['relations']:
+                        ref = r['asset']['__ref']
+                        if ref in article_map:
+                            articles.append(article_map[ref])
+                    if articles:
+                        feeds.append((c['label'], articles))
+    return pdate, feeds
+
+
+if __name__ == '__main__':
+    import sys
+    with open(sys.argv[-1]) as f:
+        html = f.read()
+    soup = BeautifulSoup(html)
+    if is_web_edition:
+        section_title, articles = parse_web_section(soup)
+        print(section_title)
+        pprint(articles)
+    else:
+        pdate, feeds = parse_todays_page(soup)
+        print(pdate)
+        pprint(feeds)

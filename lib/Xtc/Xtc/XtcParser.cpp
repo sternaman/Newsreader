@@ -199,11 +199,16 @@ XtcError XtcParser::readChapters() {
   }
 
   uint64_t chapterOffset = 0;
-  if (!m_file.seek(0x30)) {
-    return XtcError::READ_ERROR;
-  }
-  if (m_file.read(reinterpret_cast<uint8_t*>(&chapterOffset), sizeof(chapterOffset)) != sizeof(chapterOffset)) {
-    return XtcError::READ_ERROR;
+  if (m_header.tocOffset != 0) {
+    chapterOffset = static_cast<uint64_t>(m_header.tocOffset);
+  } else {
+    // Legacy: chapter offset stored at 0x30 (overlaps title offset field)
+    if (!m_file.seek(0x30)) {
+      return XtcError::READ_ERROR;
+    }
+    if (m_file.read(reinterpret_cast<uint8_t*>(&chapterOffset), sizeof(chapterOffset)) != sizeof(chapterOffset)) {
+      return XtcError::READ_ERROR;
+    }
   }
 
   if (chapterOffset == 0) {

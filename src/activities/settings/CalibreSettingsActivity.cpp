@@ -13,8 +13,8 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int MENU_ITEMS = 2;
-const char* menuNames[MENU_ITEMS] = {"Calibre Web URL", "Connect as Wireless Device"};
+constexpr int MENU_ITEMS = 3;
+const char* menuNames[MENU_ITEMS] = {"Calibre Web URL", "News Feed Path", "Connect as Wireless Device"};
 }  // namespace
 
 void CalibreSettingsActivity::taskTrampoline(void* param) {
@@ -98,6 +98,24 @@ void CalibreSettingsActivity::handleSelection() {
           updateRequired = true;
         }));
   } else if (selectedIndex == 1) {
+    // News Feed Path
+    exitActivity();
+    enterNewActivity(new KeyboardEntryActivity(
+        renderer, mappedInput, "News Feed Path", SETTINGS.opdsNewsPath, 10,
+        127,    // maxLength
+        false,  // not password
+        [this](const std::string& path) {
+          strncpy(SETTINGS.opdsNewsPath, path.c_str(), sizeof(SETTINGS.opdsNewsPath) - 1);
+          SETTINGS.opdsNewsPath[sizeof(SETTINGS.opdsNewsPath) - 1] = '\0';
+          SETTINGS.saveToFile();
+          exitActivity();
+          updateRequired = true;
+        },
+        [this]() {
+          exitActivity();
+          updateRequired = true;
+        }));
+  } else if (selectedIndex == 2) {
     // Wireless Device - launch the activity (handles WiFi connection internally)
     exitActivity();
     if (WiFi.status() != WL_CONNECTED) {
@@ -153,9 +171,13 @@ void CalibreSettingsActivity::render() {
 
     renderer.drawText(UI_10_FONT_ID, 20, settingY, menuNames[i], !isSelected);
 
-    // Draw status for URL setting
+    // Draw status for URL/path settings
     if (i == 0) {
       const char* status = (strlen(SETTINGS.opdsServerUrl) > 0) ? "[Set]" : "[Not Set]";
+      const auto width = renderer.getTextWidth(UI_10_FONT_ID, status);
+      renderer.drawText(UI_10_FONT_ID, pageWidth - 20 - width, settingY, status, !isSelected);
+    } else if (i == 1) {
+      const char* status = (strlen(SETTINGS.opdsNewsPath) > 0) ? "[Set]" : "[Not Set]";
       const auto width = renderer.getTextWidth(UI_10_FONT_ID, status);
       renderer.drawText(UI_10_FONT_ID, pageWidth - 20 - width, settingY, status, !isSelected);
     }

@@ -26,6 +26,7 @@ int HomeActivity::getMenuItemCount() const {
   int count = 3;  // My Library, File transfer, Settings
   if (hasContinueReading) count++;
   if (hasOpdsUrl) count++;
+  if (hasNewsSync) count++;
   return count;
 }
 
@@ -39,6 +40,7 @@ void HomeActivity::onEnter() {
 
   // Check if OPDS browser URL is configured
   hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
+  hasNewsSync = hasOpdsUrl && strlen(SETTINGS.opdsNewsPath) > 0;
 
   if (hasContinueReading) {
     // Extract filename from path for display
@@ -171,6 +173,7 @@ void HomeActivity::loop() {
     const int continueIdx = hasContinueReading ? idx++ : -1;
     const int myLibraryIdx = idx++;
     const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
+    const int newsSyncIdx = hasNewsSync ? idx++ : -1;
     const int fileTransferIdx = idx++;
     const int settingsIdx = idx;
 
@@ -180,6 +183,8 @@ void HomeActivity::loop() {
       onMyLibraryOpen();
     } else if (selectorIndex == opdsLibraryIdx) {
       onOpdsBrowserOpen();
+    } else if (selectorIndex == newsSyncIdx) {
+      onNewsSyncOpen();
     } else if (selectorIndex == fileTransferIdx) {
       onFileTransferOpen();
     } else if (selectorIndex == settingsIdx) {
@@ -504,6 +509,11 @@ void HomeActivity::render() {
   if (hasOpdsUrl) {
     // Insert Calibre Library after My Library
     menuItems.insert(menuItems.begin() + 1, "Calibre Library");
+  }
+  if (hasNewsSync) {
+    // Insert News Sync after Calibre Library (or after My Library if Calibre Library not shown)
+    const auto insertPos = hasOpdsUrl ? 2 : 1;
+    menuItems.insert(menuItems.begin() + insertPos, "News Sync");
   }
 
   const int menuTileWidth = pageWidth - 2 * margin;

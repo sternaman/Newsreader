@@ -2,6 +2,7 @@
 
 #include <HardwareSerial.h>
 
+#include <cctype>
 #include <cstring>
 
 OpdsParser::OpdsParser() {
@@ -106,6 +107,31 @@ const char* OpdsParser::findAttribute(const XML_Char** atts, const char* name) {
   return nullptr;
 }
 
+namespace {
+bool hasExtension(const char* href, const char* ext) {
+  if (!href || !ext) return false;
+  std::string path(href);
+  const size_t qpos = path.find_first_of("?#");
+  if (qpos != std::string::npos) {
+    path = path.substr(0, qpos);
+  }
+  const size_t extLen = strlen(ext);
+  if (path.length() < extLen) return false;
+  const size_t start = path.length() - extLen;
+  for (size_t i = 0; i < extLen; i++) {
+    const char a = static_cast<char>(std::tolower(path[start + i]));
+    const char b = static_cast<char>(std::tolower(ext[i]));
+    if (a != b) return false;
+  }
+  return true;
+}
+
+bool containsType(const char* type, const char* needle) {
+  if (!type || !needle) return false;
+  return strstr(type, needle) != nullptr;
+}
+}  // namespace
+
 void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<OpdsParser*>(userData);
 
@@ -152,11 +178,30 @@ void XMLCALL OpdsParser::startElement(void* userData, const XML_Char* name, cons
     const char* href = findAttribute(atts, "href");
 
     if (href) {
-      // Check for acquisition link with epub type (this is a downloadable book)
-      if (rel && type && strstr(rel, "opds-spec.org/acquisition") != nullptr &&
-          strcmp(type, "application/epub+zip") == 0) {
+      const bool isAcquisition = rel && strstr(rel, "opds-spec.org/acquisition") != nullptr;
+      const bool isEpub = (type && strcmp(type, "application/epub+zip") == 0) || hasExtension(href, ".epub");
+      const bool isXtch = hasExtension(href, ".xtch") || containsType(type, "xtch");
+      const bool isXtc = hasExtension(href, ".xtc") || containsType(type, "xtc");
+
+      // Check for acquisition link (downloadable book)
+      if (isAcquisition && (isEpub || isXtch || isXtc)) {
         self->currentEntry.type = OpdsEntryType::BOOK;
-        self->currentEntry.href = href;
+        if (isEpub) {
+          self->currentEntry.hrefEpub = href;
+          self->currentEntry.href = href;  // Prefer EPUB when present for compatibility
+        } else if (isXtch) {
+          self->currentEntry.hrefXtc = href;
+          if (self->currentEntry.href.empty()) {
+            self->currentEntry.href = href;
+          }
+        } else if (isXtc) {
+          if (self->currentEntry.hrefXtc.empty()) {
+            self->currentEntry.hrefXtc = href;
+          }
+          if (self->currentEntry.href.empty()) {
+            self->currentEntry.href = href;
+          }
+        }
       }
       // Check for navigation link (subsection or no rel specified with atom+xml type)
       else if (type && strstr(type, "application/atom+xml") != nullptr) {

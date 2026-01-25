@@ -1,0 +1,600 @@
+﻿#!/usr/bin/env python
+# vim:fileencoding=utf-8
+
+import json
+import os
+import re
+import time
+from datetime import datetime, timedelta
+from urllib.request import HTTPCookieProcessor, Request, build_opener
+from html import escape
+from http.cookiejar import MozillaCookieJar
+from urllib.parse import quote, urlencode
+
+from calibre.ebooks.BeautifulSoup import BeautifulSoup
+from calibre.web.feeds.news import BasicNewsRecipe
+
+
+def safe_text(s):
+    return s or ''
+
+
+_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
+    re.S,
+)
+
+
+def _chapter_label(section, title):
+    section = safe_text(section).strip()
+    title = safe_text(title).strip()
+    if section and title:
+        return section + ' | ' + title
+    return title or section or 'Contents'
+
+
+def _wrap_article(soup):
+    body = soup.find('body')
+    if not body:
+        return None
+    wrapper = body.find('div', attrs={'class': 'article'})
+    if wrapper:
+        return wrapper
+    wrapper = soup.new_tag('div', attrs={'class': 'article'})
+    for child in list(body.contents):
+        wrapper.append(child.extract())
+    body.append(wrapper)
+    return wrapper
+
+
+def _insert_chap_marker(soup, wrapper, label):
+    if not wrapper:
+        return
+    marker = soup.new_tag('div', attrs={'class': 'x4-chap-marker'})
+    marker.string = 'X4CHAP::' + label
+    wrapper.insert(0, marker)
+
+
+def _text_from_content(content):
+    if not content:
+        return ''
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        if isinstance(content.get('text'), str):
+            return content['text']
+        if 'content' in content:
+            return _text_from_content(content.get('content'))
+        return ''
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if isinstance(item.get('text'), str):
+                    parts.append(item['text'])
+                elif 'content' in item:
+                    parts.append(_text_from_content(item.get('content')))
+            elif isinstance(item, str):
+                parts.append(item)
+        return ''.join(parts)
+    return ''
+
+
+def _format_dt(dt_str):
+    if not dt_str or not isinstance(dt_str, str):
+        return ''
+    try:
+        if dt_str.endswith('Z'):
+            dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        else:
+            dt = datetime.fromisoformat(dt_str)
+        return dt.strftime('%b %d, %Y %I:%M %p')
+    except Exception:
+        return dt_str
+
+
+def _image_url(block):
+    if not isinstance(block, dict):
+        return ''
+    props = block.get('properties')
+    if isinstance(props, dict):
+        loc = props.get('location')
+        if isinstance(loc, str) and loc.startswith('http'):
+            return loc
+    src = block.get('src')
+    if isinstance(src, dict):
+        base = src.get('baseUrl')
+        path = src.get('path') or src.get('imageId')
+        size = src.get('size')
+        if isinstance(base, str) and isinstance(path, str):
+            if size:
+                return f'{base}{path}?size={size}'
+            return f'{base}{path}'
+    name = block.get('name')
+    if isinstance(name, str) and name.startswith('http'):
+        return name
+    return ''
+
+
+def _render_block(block):
+    if not isinstance(block, dict):
+        return ''
+    btype = block.get('type') or block.get('__typename')
+    if btype == 'paragraph':
+        text = _text_from_content(block.get('content') or block.get('textAndDecorations'))
+        if text:
+            return f'<p>{escape(text)}</p>'
+        return ''
+    if btype in ('heading', 'subhead'):
+        text = _text_from_content(block.get('content') or block.get('textAndDecorations'))
+        if text:
+            return f'<h2>{escape(text)}</h2>'
+        return ''
+    if btype == 'image':
+        url = _image_url(block)
+        if not url:
+            return ''
+        caption = _text_from_content(block.get('richTextCaption') or block.get('caption'))
+        credit = _text_from_content(block.get('credit'))
+        cap = ''
+        if caption or credit:
+            cap_text = caption
+            if credit:
+                cap_text = (cap_text + ' ' if cap_text else '') + credit
+            cap = f'<div class="figc">{escape(cap_text)}</div>'
+        return f'<div class="figure"><img src="{escape(url)}"/>{cap}</div>'
+    if btype == 'inset':
+        bullets = block.get('bullets')
+        if isinstance(bullets, list) and bullets:
+            items = []
+            for bullet in bullets:
+                text = _text_from_content(bullet)
+                if text:
+                    items.append(f'<li>{escape(text)}</li>')
+            if items:
+                return '<ul>' + ''.join(items) + '</ul>'
+        return ''
+    if btype == 'ad':
+        return ''
+    return ''
+
+
+class WSJX4(BasicNewsRecipe):
+    title = 'WSJ (X4)'
+    __author__ = 'local'
+    description = (
+        'The Print Edition of WSJ. The Wall Street Journal is your source '
+        'for breaking news, analysis and insights from the U.S. and '
+        "around the world, the world's leading business and finance publication."
+    )
+    language = 'en_US'
+    masthead_url = 'https://s.wsj.net/media/wsj_amp_masthead_lg.png'
+    encoding = 'utf-8'
+    no_javascript = True
+    no_stylesheets = True
+    remove_attributes = ['style', 'height', 'width']
+    resolve_internal_links = True
+    ignore_duplicate_articles = {'url', 'title'}
+    remove_empty_feeds = True
+    scale_news_images = (360, 480)
+    articles_are_obfuscated = True
+
+    recipe_specific_options = {
+        'date': {
+            'short': 'The date of the edition to download (YYYY-MM-DD format)\nOnly the past 6 editions will be available ',
+            'long': 'For example, 2024-05-13',
+        },
+        'res': {
+            'short': 'For hi-res images, select a resolution from the\nfollowing options: 800, 1000, 1200 or 1500',
+            'long': 'This is useful for non e-ink devices, and for a lower file size\nthan the default, use 400 or 300.',
+            'default': '600',
+        },
+        'cookie_file': {
+            'short': 'Path to Netscape cookies.txt for wsj.com (optional)',
+            'long': 'Export cookies from your browser and point this to the file',
+            'default': ''
+        }
+    }
+
+    extra_css = '''
+        body { font-family: Bookerly, serif; }
+        #big-top-caption { font-size:small; text-align:center; }
+        [data-type="tagline"] { font-style:italic; color:#202020; }
+        .auth, time { font-size:small; }
+        .sub, em, i { color: #202020; }
+        img { display:block; margin:0.6em auto; max-width:75%; max-height:45%; width:auto; height:auto; }
+        .figc { font-size:small; text-align:center; }
+        .standfirst { font-style:italic; }
+        .article { page-break-after: always; }
+        .toc-page { page-break-after: always; }
+        .toc-section-title { font-size:80%; font-weight:bold; letter-spacing:0.04em; text-transform:uppercase; color:#404040; margin-top:0.8em; }
+        .toc-list { margin:0.2em 0 0.6em 1.2em; padding:0; }
+        .toc-list li { margin:0.1em 0; }
+        .x4-chap-marker { font-size:1px; line-height:1px; color:#ffffff; margin:0; padding:0; }
+    '''
+
+    keep_only_tags = [
+        dict(name=['h1', 'h2']),
+        dict(attrs={'aria-describedby': 'big-top-caption'}),
+        dict(attrs={'id': 'big-top-caption'}),
+        dict(name='article', attrs={'style': lambda x: x and 'article-body' in x}),
+    ]
+
+    remove_tags = [
+        dict(attrs={'data-type': ['inset', 'video']}),
+        dict(attrs={'data-testid': 'ad-container'}),
+        dict(attrs={'data-spotim-app': 'conversation'}),
+        dict(name=['button', 'svg', 'old-script', 'video']),
+        dict(
+            attrs={
+                'aria-label': [
+                    'Sponsored Offers',
+                    'Listen To Article',
+                    'What to Read Next',
+                    'Utility Bar',
+                    'Conversation',
+                    'List of Comments',
+                    'Comment',
+                    'JR More Articles',
+                ]
+            }
+        ),
+        dict(
+            attrs={
+                'data-spot-im-class': [
+                    'message-text',
+                    'messages-list',
+                    'message-view',
+                    'conversation-root',
+                ]
+            }
+        ),
+        dict(
+            attrs={
+                'id': lambda x: x
+                and x.startswith((
+                    'comments_sector',
+                    'wrapper-INLINE',
+                    'audio-tag-inner-audio-',
+                    'article-comments-tool',
+                ))
+            }
+        ),
+        dict(name='div', attrs={'data-message-depth': True}),
+    ]
+
+    def __init__(self, *args, **kwargs):
+        BasicNewsRecipe.__init__(self, *args, **kwargs)
+        self.section_by_url = {}
+        self._cookie_jar = None
+        cookie_file = self.recipe_specific_options.get('cookie_file')
+        if cookie_file and isinstance(cookie_file, str) and os.path.exists(cookie_file):
+            jar = MozillaCookieJar(cookie_file)
+            try:
+                jar.load(ignore_discard=True, ignore_expires=True)
+                self._cookie_jar = jar
+            except Exception:
+                self._cookie_jar = None
+
+    def preprocess_html(self, soup):
+        res = '?width=600'
+        w = self.recipe_specific_options.get('res')
+        if w and isinstance(w, str):
+            res = '?width=' + w
+        for img in soup.findAll('img', attrs={'currentsourceurl': True}):
+            img['src'] = img['currentsourceurl'].split('?')[0] + res
+        for p in soup.findAll('div', attrs={'data-type': ['paragraph', 'image']}):
+            p.name = 'p'
+        for a in soup.findAll('a', href=True):
+            a['href'] = 'http' + a['href'].split('http')[-1]
+        for figc in soup.findAll('figcaption'):
+            figc['id'] = 'big-top-caption'
+        if name := soup.find('h2', attrs={'itemprop': 'name'}):
+            name.extract()
+        for h2 in soup.findAll('h2'):
+            if self.tag_to_string(h2).startswith(('What to Read Next', 'Conversation')):
+                h2.extract()
+            h2.name = 'h3'
+            h2['class'] = 'sub'
+        for ph in soup.findAll('a', attrs={'data-type': ['phrase', 'link']}):
+            if div := ph.findParent('div'):
+                div.name = 'span'
+        for auth in soup.findAll(
+            'a', attrs={'aria-label': lambda x: x and x.startswith('Author page')}
+        ):
+            if div := auth.find_previous_sibling('div'):
+                div.name = 'span'
+            if parent := auth.findParent('div'):
+                parent['class'] = 'auth'
+        for x in soup.findAll('ufc-follow-author-widget'):
+            if y := x.findParent('div'):
+                y.extract()
+        return soup
+
+    def preprocess_raw_html(self, raw, url):
+        if isinstance(raw, bytes):
+            raw_str = raw.decode('utf-8', errors='ignore')
+        else:
+            raw_str = raw or ''
+
+        m = _NEXT_DATA_RE.search(raw_str)
+        if not m:
+            return raw
+        try:
+            data = json.loads(m.group(1))
+        except Exception:
+            return raw
+
+        page_props = data.get('props', {}).get('pageProps', {})
+        article_data = page_props.get('articleData', {})
+        body = article_data.get('flattenedBody') or []
+        if not body:
+            return raw
+
+        headline = _text_from_content(article_data.get('headline'))
+        standfirst = _text_from_content(
+            (article_data.get('standFirst') or {}).get('content')
+        )
+
+        authors = []
+        for auth in article_data.get('authors') or []:
+            text = _text_from_content(auth)
+            if text:
+                authors.append(text)
+        byline = ', '.join(authors)
+
+        updated = _format_dt(article_data.get('updatedDateTimeUtc'))
+        published = _format_dt(article_data.get('publishedDateTimeUtc'))
+        date_line = updated or published
+
+        parts = [
+            '<html><head><title>',
+            escape(headline or 'Article'),
+            '</title></head><body>',
+            '<article class="article" style="article-body">',
+        ]
+        if headline:
+            parts.append('<h1>' + escape(headline) + '</h1>')
+        if byline or date_line:
+            meta = ' | '.join([x for x in [byline, date_line] if x])
+            if meta:
+                parts.append('<div class="auth">' + escape(meta) + '</div>')
+        if standfirst:
+            parts.append('<div class="standfirst">' + escape(standfirst) + '</div>')
+
+        for block in body:
+            rendered = _render_block(block)
+            if rendered:
+                parts.append(rendered)
+
+        parts.append('</article></body></html>')
+        return ''.join(parts)
+
+    def _download_cover(self):
+        import os
+        from contextlib import closing
+
+        from calibre import browser
+        from calibre.utils.img import save_cover_data_to
+
+        br = browser()
+        dt = self.recipe_specific_options.get('date')
+        if (dt and isinstance(dt, str)):
+            d, m, y = dt.split('-')
+            cu = f'https://www.wsj.com/public/resources/documents/WSJNewsPaper-{int(m)}-{int(d)}-{y}.jpg'
+        else:
+            raw = br.open('https://frontpages.freedomforum.org/newspapers/wsj-The_Wall_Street_Journal')
+            soup = BeautifulSoup(raw.read())
+            cu = soup.find(
+                    'img',
+                    attrs={
+                        'alt': 'Front Page Image',
+                        'src': lambda x: x and x.endswith('front-page-large.jpg'),
+                    },
+                )['src'].replace('-large', '-medium')
+        self.report_progress(1, _('Downloading cover from %s') % cu)
+        with closing(br.open(cu, timeout=self.timeout)) as r:
+            cdata = r.read()
+        cpath = os.path.join(self.output_dir, 'cover.jpg')
+        save_cover_data_to(cdata, cpath)
+        self.cover_path = cpath
+
+    def get_browser(self, *args, **kw):
+        kw['user_agent'] = (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+        )
+        br = BasicNewsRecipe.get_browser(self, *args, **kw)
+        br.addheaders += [
+            ('Accept-Language', 'en-US,en;q=0.9'),
+            ('apollographql-client-name', 'wsj-mobile-android-release'),
+        ]
+        cookie_file = self.recipe_specific_options.get('cookie_file')
+        if cookie_file and isinstance(cookie_file, str) and os.path.exists(cookie_file):
+            jar = MozillaCookieJar(cookie_file)
+            try:
+                jar.load(ignore_discard=True, ignore_expires=True)
+                br.set_cookiejar(jar)
+            except Exception:
+                pass
+        return br
+
+    def _fetch_raw(self, url):
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+            ),
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'identity',
+        }
+        req = Request(url, headers=headers)
+        if self._cookie_jar:
+            opener = build_opener(HTTPCookieProcessor(self._cookie_jar))
+        else:
+            opener = build_opener()
+        with opener.open(req, timeout=getattr(self, 'timeout', 20)) as resp:
+            return resp.read()
+
+    def get_obfuscated_article(self, url):
+        raw = self._fetch_raw(url)
+        return {'data': raw, 'url': url}
+
+    def parse_index(self):
+        query = {
+            'operationName': 'IssueQuery',
+            'variables': '{"publication":"WSJ","region":"US","masthead":"ITPNEXTGEN"}',
+            'extensions': '{"persistedQuery":{"version":1,"sha256Hash":"d938226e7d1c1fff050e7d084c72179e2713dcf4736d3a442c618c55b896f847"}}',
+        }
+        url = 'https://shared-data.dowjones.io/gateway/graphql?' + urlencode(
+            query, safe='()!', quote_via=quote
+        )
+        raw = self.index_to_soup(url, raw=True)
+
+        cat_data = json.loads(raw)['data']['mobileIssuesByMasthead']
+        edit = [x['datedLabel'] for x in cat_data][1:]
+        self.log('**Past Editions available : ' + ' | '.join(edit))
+
+        past_edition = self.recipe_specific_options.get('date')
+
+        for itm in cat_data:
+            if past_edition and isinstance(past_edition, str):
+                if past_edition in itm['publishedDateUtc']:
+                    self.timefmt = ' [' + itm['datedLabel']
+                    sections_ = itm['sections']
+                    break
+            self.timefmt = f' [{itm["datedLabel"]}]'
+            sections_ = itm['sections']
+            break
+
+        self.log('Downloading ', self.timefmt)
+
+        feeds = []
+
+        for sec in sections_[:-1]:
+            time.sleep(3)
+            section = sec['label']
+            self.log(section)
+            cont_id = sec['key']
+
+            query = {
+                'operationName': 'SectionQuery',
+                'variables': '{{\"id\":\"{}\"}}'.format(cont_id),
+                'extensions': '{"persistedQuery":{"version":1,"sha256Hash":"207fe93376f379bf223ed2734cf9313a28291293366a803db923666fa6b45026"}}',
+            }
+            sec_url = 'https://shared-data.dowjones.io/gateway/graphql?' + urlencode(
+                query, safe='()!', quote_via=quote
+            )
+            sec_raw = self.index_to_soup(sec_url, raw=True)
+
+            sec_data = json.loads(sec_raw)['data']['summaryCollectionContent'][
+                'collectionItems'
+            ]
+
+            articles = []
+
+            for art in sec_data:
+                for arts in art['collectionItems']:
+                    mobi = arts['content']['mobileSummary']
+                    title = mobi['headline']['text']
+                    try:
+                        desc = mobi['description']['content']['text']
+                    except TypeError:
+                        desc = ''
+                    url = arts['content']['sourceUrl']
+                    self.log('          ', title, '\n\t', desc, '\n\t', url)
+                    articles.append({'title': title, 'description': desc, 'url': url})
+                    self.section_by_url[url] = section
+            feeds.append((section, articles))
+        return feeds
+
+    def feeds2index(self, feeds):
+        toc_entries = []
+        for idx, feed in enumerate(feeds):
+            section = safe_text(getattr(feed, 'title', '')).strip()
+            articles = getattr(feed, 'articles', [])
+            titles = []
+            for article in articles:
+                title = safe_text(getattr(article, 'title', '')).strip()
+                if title:
+                    titles.append(title)
+            toc_entries.append((idx, section or 'News', titles))
+        return self._render_toc_html(toc_entries)
+
+    def _render_toc_html(self, sections):
+        css = (getattr(self, 'template_css', '') or '') + '\n' + (self.get_extra_css() or '')
+        parts = [
+            '<html><head><title>Contents</title>',
+            '<style type="text/css">' + css + '</style>',
+            '</head>',
+            '<body class="toc-page"><h1>Contents</h1>',
+            '<div class="x4-chap-marker">X4CHAP::Contents</div>',
+        ]
+        for feed_idx, section, titles in sections:
+            sec = escape(safe_text(section).strip())
+            if not sec:
+                continue
+            parts.append('<div class="toc-section" id="feed_' + str(feed_idx) + '">')
+            parts.append('<div class="toc-section-title">' + sec + '</div>')
+            if titles:
+                parts.append('<ul class="toc-list">')
+                for title in titles:
+                    parts.append('<li>' + escape(title) + '</li>')
+                parts.append('</ul>')
+            parts.append('</div>')
+        parts.append('</body></html>')
+        return ''.join(parts).encode('utf-8')
+
+    def postprocess_html(self, soup, first_fetch):
+        for link in soup.findAll('a', attrs={'rel': 'calibre-downloaded-from'}):
+            parent = link.find_parent('p')
+            if parent:
+                parent.decompose()
+            else:
+                link.decompose()
+
+        for link in list(soup.findAll('a')):
+            if link.get('rel') == 'calibre-downloaded-from':
+                continue
+            if link.contents:
+                link.unwrap()
+            else:
+                link.decompose()
+        return soup
+
+    def internal_postprocess_book(self, oeb, opts, log):
+        super(WSJX4, self).internal_postprocess_book(oeb, opts, log)
+        for item in oeb.spine:
+            try:
+                nodes = item.data.xpath('//*[local-name()="p"][descendant::*[@rel="calibre-downloaded-from"]]')
+            except Exception:
+                continue
+            for p in nodes:
+                parent = p.getparent()
+                if parent is not None:
+                    parent.remove(p)
+        for item in oeb.spine:
+            try:
+                navs = item.data.xpath(
+                    '//*[local-name()="div"][contains(concat(" ", normalize-space(@class), " "), " calibre_navbar")]'
+                )
+            except Exception:
+                continue
+            for div in navs:
+                parent = div.getparent()
+                if parent is not None:
+                    parent.remove(div)
+
+    def populate_article_metadata(self, article, soup, first):
+        wrapper = _wrap_article(soup)
+        h1 = soup.find('h1')
+        title = ''
+        if h1:
+            title = self.tag_to_string(h1).strip()
+        if not title:
+            title = safe_text(getattr(article, 'title', '')).strip()
+        url = getattr(article, 'url', '')
+        section = self.section_by_url.get(url, '')
+        label = _chapter_label(section, title)
+        _insert_chap_marker(soup, wrapper, label)
+

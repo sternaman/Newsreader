@@ -1,0 +1,37 @@
+﻿{
+  "out_dir": "news_out",
+  "continue_on_error": true,
+  "serve": true,
+  "host": "0.0.0.0",
+  "port": 8080,
+  "sources": [
+    {
+      "type": "recipe",
+      "title": "Bloomberg",
+      "recipe": "../recipes/bloomberg_x4.recipe"
+    },
+    {
+      "type": "recipe",
+      "title": "Businessweek",
+      "recipe": "../recipes/businessweek_x4.recipe"
+    },
+    {
+      "type": "recipe",
+      "title": "WSJ",
+      "recipe": "../recipes/wsj_x4.recipe",
+      "recipe_options": ["cookie_file=secrets/wsj_cookies.txt"]
+    },
+    {
+      "type": "recipe",
+      "title": "NYTimes",
+      "recipe": "../recipes/nytimes_x4.recipe",
+      "recipe_options": ["cookie_file=secrets/nyt_cookies.txt"]
+    },
+    {
+      "type": "recipe",
+      "title": "ExecSum",
+      "recipe": "../recipes/substack_x4.recipe",
+      "recipe_options": ["auths=@execsum", "days=365"]
+    }
+  ]
+}
