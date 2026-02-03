@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import re
 import shutil
 import subprocess
@@ -41,6 +42,21 @@ def _find_ebook_convert() -> str:
 
 def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
+
+
+def _looks_like_path(value: str) -> bool:
+    if not value:
+        return False
+    lower = value.lower()
+    if lower.startswith(("http://", "https://", "ftp://")):
+        return False
+    if value.startswith((".", "/", "\\")):
+        return True
+    if any(sep in value for sep in ("/", "\\", os.sep)):
+        return True
+    if lower.endswith((".txt", ".sqlite", ".json", ".db", ".cookie", ".cookies", ".pem", ".crt", ".key")):
+        return True
+    return False
 
 
 def _render_pdf_to_images(pdf_path: Path, target_size: tuple[int, int]) -> list[Image.Image]:
@@ -144,6 +160,7 @@ def main() -> int:
         recipe_path = Path(args.recipe)
         if not recipe_path.exists():
             raise SystemExit(f"Recipe not found: {recipe_path}")
+        recipe_base = recipe_path.parent
         cmd = [ebook_convert, str(recipe_path), str(epub_path)]
         if title:
             cmd += ["--title", title]
@@ -156,6 +173,11 @@ def main() -> int:
                 key, val = opt.split(":", 1)
             else:
                 raise SystemExit(f"Invalid recipe option (expected key=value): {opt}")
+            if _looks_like_path(val):
+                path = Path(val)
+                if not path.is_absolute():
+                    path = (recipe_base / path).resolve()
+                val = str(path)
             cmd += ["--recipe-specific-option", f"{key}:{val}"]
         _run(cmd)
     else:
