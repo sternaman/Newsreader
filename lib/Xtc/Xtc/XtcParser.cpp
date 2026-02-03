@@ -222,8 +222,8 @@ XtcError XtcParser::readChapters() {
   }
 
   uint64_t chapterOffset = 0;
-  if (m_header.tocOffset != 0) {
-    chapterOffset = static_cast<uint64_t>(m_header.tocOffset);
+  if (m_header.chapterOffset != 0) {
+    chapterOffset = static_cast<uint64_t>(m_header.chapterOffset);
   } else {
     // Legacy: chapter offset stored at 0x30 (overlaps title offset field)
     if (!m_file.seek(0x30)) {

@@ -141,15 +141,19 @@ void NewsSyncActivity::startSync() {
 }
 
 void NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
+  const char* serverUrl = SETTINGS.opdsServerUrl;
+  if (strlen(serverUrl) == 0) {
+    setError("Calibre Web URL not set");
+    return;
+  }
+
   const std::string downloadHref = !entry.hrefXtc.empty() ? entry.hrefXtc : entry.href;
   if (downloadHref.empty()) {
     setError("No download link");
     return;
   }
+  // Use a stable filename per source so daily bundles overwrite cleanly.
   std::string baseName = entry.title;
-  if (!entry.author.empty()) {
-    baseName += " - " + entry.author;
-  }
   std::string safeName = StringUtils::sanitizeFilename(baseName);
   if (safeName.empty()) {
     safeName = "news";
@@ -166,11 +170,9 @@ void NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
   }
 
   const std::string destPath = std::string(kNewsDir) + "/" + safeName + extension;
+  // Overwrite existing bundle so the latest download replaces prior days.
   if (SdMan.exists(destPath.c_str())) {
-    state = SyncState::COMPLETE;
-    statusMessage = "Already downloaded";
-    updateRequired = true;
-    return;
+    SdMan.remove(destPath.c_str());
   }
 
   state = SyncState::DOWNLOADING;
