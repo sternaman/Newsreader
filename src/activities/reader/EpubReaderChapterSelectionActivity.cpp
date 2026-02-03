@@ -181,34 +181,36 @@ void EpubReaderChapterSelectionActivity::renderScreen() {
   const int pageItems = getPageItems();
   const int totalItems = getTotalItems();
 
-  const std::string title =
-      renderer.truncatedText(UI_12_FONT_ID, epub->getTitle().c_str(), pageWidth - 40, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, title.c_str(), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 15, "Go to Chapter", true, EpdFontFamily::BOLD);
 
   const auto pageStartIndex = selectorIndex / pageItems * pageItems;
   renderer.fillRect(0, 60 + (selectorIndex % pageItems) * 30 - 2, pageWidth - 1, 30);
 
-  for (int itemIndex = pageStartIndex; itemIndex < totalItems && itemIndex < pageStartIndex + pageItems; itemIndex++) {
-    const int displayY = 60 + (itemIndex % pageItems) * 30;
+  for (int i = 0; i < pageItems; i++) {
+    int itemIndex = pageStartIndex + i;
+    if (itemIndex >= totalItems) break;
+    const int displayY = 60 + i * 30;
     const bool isSelected = (itemIndex == selectorIndex);
 
     if (isSyncItem(itemIndex)) {
-      // Draw sync option (at top or bottom)
       renderer.drawText(UI_10_FONT_ID, 20, displayY, ">> Sync Progress", !isSelected);
     } else {
-      // Draw TOC item (account for top sync offset)
       const int tocIndex = tocIndexFromItemIndex(itemIndex);
       auto item = epub->getTocItem(tocIndex);
+
       const int indentSize = 20 + (item.level - 1) * 15;
       const std::string chapterName =
           renderer.truncatedText(UI_10_FONT_ID, item.title.c_str(), pageWidth - 40 - indentSize);
-      renderer.drawText(UI_10_FONT_ID, indentSize, 60 + (tocIndex % pageItems) * 30, chapterName.c_str(),
-                        tocIndex != selectorIndex);
+
+      renderer.drawText(UI_10_FONT_ID, indentSize, displayY, chapterName.c_str(), !isSelected);
     }
   }
 
-  const auto labels = mappedInput.mapLabels("« Back", "Select", "Up", "Down");
-  renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  // Skip button hints in landscape CW mode (they overlap content)
+  if (renderer.getOrientation() != GfxRenderer::LandscapeClockwise) {
+    const auto labels = mappedInput.mapLabels("« Back", "Select", "Up", "Down");
+    renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 
   renderer.displayBuffer();
 }

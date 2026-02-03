@@ -5,6 +5,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include "EpubReaderMenuActivity.h"
 #include "activities/ActivityWithSubactivity.h"
 
 class EpubReaderActivity final : public ActivityWithSubactivity {
@@ -15,6 +16,8 @@ class EpubReaderActivity final : public ActivityWithSubactivity {
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   int pagesUntilFullRefresh = 0;
+  int cachedSpineIndex = 0;
+  int cachedChapterTotalPageCount = 0;
   bool updateRequired = false;
   const std::function<void()> onGoBack;
   const std::function<void()> onGoHome;
@@ -25,6 +28,9 @@ class EpubReaderActivity final : public ActivityWithSubactivity {
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar(int orientedMarginRight, int orientedMarginBottom, int orientedMarginLeft) const;
+  void saveProgress(int spineIndex, int currentPage, int pageCount);
+  void onReaderMenuBack();
+  void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,

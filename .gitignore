@@ -6,5 +6,8 @@ secrets/
 scripts/nytrss_docker/data/*.txt
 lib/EpdFont/fontsrc
 *.generated.h
+.vs
 build
 **/__pycache__/
+/compile_commands.json
+/.cache

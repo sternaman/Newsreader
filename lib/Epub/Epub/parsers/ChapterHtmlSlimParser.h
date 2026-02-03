@@ -18,7 +18,7 @@ class ChapterHtmlSlimParser {
   const std::string& filepath;
   GfxRenderer& renderer;
   std::function<void(std::unique_ptr<Page>)> completePageFn;
-  std::function<void(int)> progressFn;  // Progress callback (0-100)
+  std::function<void()> popupFn;  // Popup callback
   int depth = 0;
   int skipUntilDepth = INT_MAX;
   int boldUntilDepth = INT_MAX;
@@ -39,6 +39,7 @@ class ChapterHtmlSlimParser {
   bool hyphenationEnabled;
 
   void startNewTextBlock(TextBlock::Style style);
+  void flushPartWordBuffer();
   void makePages();
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
@@ -51,7 +52,7 @@ class ChapterHtmlSlimParser {
                                  const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                  const uint16_t viewportHeight, const bool hyphenationEnabled,
                                  const std::function<void(std::unique_ptr<Page>)>& completePageFn,
-                                 const std::function<void(int)>& progressFn = nullptr)
+                                 const std::function<void()>& popupFn = nullptr)
       : filepath(filepath),
         renderer(renderer),
         fontId(fontId),
@@ -62,7 +63,7 @@ class ChapterHtmlSlimParser {
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
         completePageFn(completePageFn),
-        progressFn(progressFn) {}
+        popupFn(popupFn) {}
   ~ChapterHtmlSlimParser() = default;
   bool parseAndBuildPages();
   void addLineToPage(std::shared_ptr<TextBlock> line);
