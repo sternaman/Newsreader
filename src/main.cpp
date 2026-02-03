@@ -242,6 +242,11 @@ void onGoToNewsSync() {
   enterNewActivity(new NewsSyncActivity(renderer, mappedInputManager, onGoHome));
 }
 
+void onGoToNewsSyncAuto() {
+  exitActivity();
+  enterNewActivity(new NewsSyncActivity(renderer, mappedInputManager, onGoHome, true));
+}
+
 void onGoHome() {
   exitActivity();
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onContinueReading, onGoToMyLibrary, onGoToSettings,
@@ -300,7 +305,8 @@ void setup() {
   SETTINGS.loadFromFile();
   KOREADER_STORE.loadFromFile();
 
-  switch (gpio.getWakeupReason()) {
+  const auto wakeReason = gpio.getWakeupReason();
+  switch (wakeReason) {
     case HalGPIO::WakeupReason::PowerButton:
       // For normal wakeups, verify power button press duration
       Serial.printf("[%lu] [   ] Verifying power button press duration\n", millis());
@@ -329,7 +335,14 @@ void setup() {
   APP_STATE.loadFromFile();
   RECENT_BOOKS.loadFromFile();
 
-  if (APP_STATE.openEpubPath.empty()) {
+  const bool autoNewsEnabled = SETTINGS.autoNewsSyncOnBoot != 0 &&
+                               wakeReason != HalGPIO::WakeupReason::PowerButton &&
+                               strlen(SETTINGS.opdsServerUrl) > 0 &&
+                               strlen(SETTINGS.opdsNewsPath) > 0;
+
+  if (autoNewsEnabled) {
+    onGoToNewsSyncAuto();
+  } else if (APP_STATE.openEpubPath.empty()) {
     onGoHome();
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load

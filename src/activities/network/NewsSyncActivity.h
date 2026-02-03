@@ -17,12 +17,14 @@
 class NewsSyncActivity final : public ActivityWithSubactivity {
  public:
   explicit NewsSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                            const std::function<void()>& onGoHome)
-      : ActivityWithSubactivity("NewsSync", renderer, mappedInput), onGoHome(onGoHome) {}
+                            const std::function<void()>& onGoHome, bool autoMode = false)
+      : ActivityWithSubactivity("NewsSync", renderer, mappedInput),
+        onGoHome(onGoHome),
+        autoMode(autoMode) {}
 
   void onEnter() override;
   void onExit() override;
- void loop() override;
+  void loop() override;
 
  private:
   enum class SyncState { CHECK_WIFI, WIFI_SELECTION, FETCHING_FEED, SELECT_SOURCE, DOWNLOADING, COMPLETE, ERROR };
@@ -40,6 +42,8 @@ class NewsSyncActivity final : public ActivityWithSubactivity {
   int selectorIndex = 0;
 
   const std::function<void()> onGoHome;
+  bool autoMode = false;
+  bool autoExitPending = false;
 
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();

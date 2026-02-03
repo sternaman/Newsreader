@@ -135,9 +135,26 @@ void NewsSyncActivity::startSync() {
 
   entries = books;
   selectorIndex = 0;
-  state = SyncState::SELECT_SOURCE;
-  statusMessage = "Select source";
-  updateRequired = true;
+  if (autoMode) {
+    statusMessage = "Auto syncing...";
+    updateRequired = true;
+    for (const auto& entry : entries) {
+      downloadEntry(entry);
+      if (state == SyncState::ERROR) {
+        break;
+      }
+    }
+    if (state != SyncState::ERROR) {
+      state = SyncState::COMPLETE;
+      statusMessage = "Sync complete";
+      updateRequired = true;
+    }
+    autoExitPending = true;
+  } else {
+    state = SyncState::SELECT_SOURCE;
+    statusMessage = "Select source";
+    updateRequired = true;
+  }
 }
 
 void NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
@@ -217,6 +234,11 @@ void NewsSyncActivity::setError(const std::string& message) {
 void NewsSyncActivity::loop() {
   if (subActivity) {
     subActivity->loop();
+    return;
+  }
+
+  if (autoMode && autoExitPending && (state == SyncState::COMPLETE || state == SyncState::ERROR)) {
+    onGoHome();
     return;
   }
 
