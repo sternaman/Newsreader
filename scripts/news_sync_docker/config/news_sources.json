@@ -34,7 +34,7 @@
       "recipe": "/app/recipes/nytimes_x4.recipe",
       "recipe_options": [
         "cookie_file=/secrets/nyt_cookies.txt",
-        "res=articleInline",
+        "res=mediumThreeByTwo440",
         "emit_chapter_markers=false"
       ]
     },

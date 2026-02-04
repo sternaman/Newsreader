@@ -34,6 +34,8 @@ _NEXT_DATA_RE = re.compile(
     re.S,
 )
 
+_AMP_IMG_RE = re.compile(r'\\s+')
+
 
 def _chapter_label(section, title):
     section = safe_text(section).strip()
@@ -214,6 +216,30 @@ def _render_block(block):
         return ''
     if btype == 'ad':
         return ''
+    return ''
+
+
+def _amp_url(url):
+    if not url:
+        return url
+    if '/amp/' in url:
+        return url
+    if '/articles/' in url:
+        return url.replace('/articles/', '/amp/articles/', 1)
+    return url
+
+
+def _amp_img_src(tag):
+    if not tag:
+        return ''
+    src = tag.get('src')
+    if src:
+        return src
+    srcset = tag.get('srcset')
+    if srcset:
+        # Take first URL in srcset
+        first = srcset.split(',', 1)[0].strip().split(' ')[0]
+        return first
     return ''
 
 
@@ -403,10 +429,10 @@ class WSJX4(BasicNewsRecipe):
         article_data = page_props.get('articleData', {})
         body = _extract_body_blocks(article_data)
         if not body:
-            return raw
+            return self._try_amp(url, raw)
         if _body_text_length(body) < 800:
-            # Likely truncated; fall back to HTML parsing.
-            return raw
+            # Likely truncated; fall back to AMP/HTML parsing.
+            return self._try_amp(url, raw)
 
         headline = _text_from_content(article_data.get('headline'))
         standfirst = _text_from_content(
@@ -446,6 +472,44 @@ class WSJX4(BasicNewsRecipe):
 
         parts.append('</article></body></html>')
         return ''.join(parts)
+
+    def _try_amp(self, url, raw):
+        amp_url = _amp_url(url)
+        if not amp_url:
+            return raw
+        try:
+            amp_raw = self._fetch_raw(amp_url)
+        except Exception:
+            return raw
+        amp_html = self._extract_amp_article_html(amp_raw)
+        return amp_html or raw
+
+    def _extract_amp_article_html(self, raw):
+        if isinstance(raw, bytes):
+            raw_str = raw.decode('utf-8', errors='ignore')
+        else:
+            raw_str = raw or ''
+        soup = BeautifulSoup(raw_str)
+        article = soup.find('article')
+        if not article:
+            return None
+
+        for tag in article.findAll(['script', 'style', 'noscript', 'svg', 'form', 'button']):
+            tag.extract()
+
+        for amp_img in article.findAll('amp-img'):
+            src = _amp_img_src(amp_img)
+            if not src:
+                amp_img.extract()
+                continue
+            img = soup.new_tag('img', attrs={'src': src})
+            amp_img.replace_with(img)
+
+        wrapper = soup.new_tag('div', attrs={'class': 'article'})
+        for child in list(article.contents):
+            wrapper.append(child.extract())
+        html = '<html><body>' + wrapper.prettify() + '</body></html>'
+        return html
 
     def _download_cover(self):
         import os
