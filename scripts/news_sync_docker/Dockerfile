@@ -11,6 +11,7 @@ RUN apt-get update \
        ca-certificates \
        fontconfig \
        libopengl0 \
+       libxcb-cursor0 \
        wget \
        xz-utils \
     && rm -rf /var/lib/apt/lists/*
