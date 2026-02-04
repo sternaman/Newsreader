@@ -27,14 +27,16 @@ class XtcHeader:
     version_major: int
     version_minor: int
     page_count: int
-    flags: int
-    header_size: int
-    reserved1: int
-    toc_offset: int
+    read_direction: int
+    has_metadata: int
+    has_thumbnails: int
+    has_chapters: int
+    current_page: int
+    metadata_offset: int
     page_table_offset: int
     data_offset: int
-    reserved2: int
-    title_offset: int
+    thumb_offset: int
+    chapter_offset: int
     padding: int
 
 
@@ -167,19 +169,21 @@ def _encode_xtc_bitmap(values: Sequence[int], width: int, height: int) -> bytes:
 
 def _write_header(f, header: XtcHeader) -> None:
     data = struct.pack(
-        "<I B B H I I I I Q Q Q I I",
+        "<I B B H B B B B I Q Q Q Q I I",
         header.magic,
         header.version_major,
         header.version_minor,
         header.page_count,
-        header.flags,
-        header.header_size,
-        header.reserved1,
-        header.toc_offset,
+        header.read_direction,
+        header.has_metadata,
+        header.has_thumbnails,
+        header.has_chapters,
+        header.current_page,
+        header.metadata_offset,
         header.page_table_offset,
         header.data_offset,
-        header.reserved2,
-        header.title_offset,
+        header.thumb_offset,
+        header.chapter_offset,
         header.padding,
     )
     f.seek(0)
@@ -190,21 +194,23 @@ def _read_header(f) -> XtcHeader:
     data = f.read(56)
     if len(data) != 56:
         raise ValueError("File too small for XTC header")
-    unpacked = struct.unpack("<I B B H I I I I Q Q Q I I", data)
+    unpacked = struct.unpack("<I B B H B B B B I Q Q Q Q I I", data)
     return XtcHeader(
         magic=unpacked[0],
         version_major=unpacked[1],
         version_minor=unpacked[2],
         page_count=unpacked[3],
-        flags=unpacked[4],
-        header_size=unpacked[5],
-        reserved1=unpacked[6],
-        toc_offset=unpacked[7],
-        page_table_offset=unpacked[8],
-        data_offset=unpacked[9],
-        reserved2=unpacked[10],
-        title_offset=unpacked[11],
-        padding=unpacked[12],
+        read_direction=unpacked[4],
+        has_metadata=unpacked[5],
+        has_thumbnails=unpacked[6],
+        has_chapters=unpacked[7],
+        current_page=unpacked[8],
+        metadata_offset=unpacked[9],
+        page_table_offset=unpacked[10],
+        data_offset=unpacked[11],
+        thumb_offset=unpacked[12],
+        chapter_offset=unpacked[13],
+        padding=unpacked[14],
     )
 
 
@@ -254,14 +260,16 @@ def pack_xtch_from_images(
         version_major=1,
         version_minor=0,
         page_count=page_count,
-        flags=0,
-        header_size=page_table_offset,
-        reserved1=0,
-        toc_offset=0,
+        read_direction=0,
+        has_metadata=1,
+        has_thumbnails=0,
+        has_chapters=0,
+        current_page=0,
+        metadata_offset=0,
         page_table_offset=page_table_offset,
         data_offset=data_offset,
-        reserved2=0,
-        title_offset=title_offset,
+        thumb_offset=0,
+        chapter_offset=0,
         padding=0,
     )
 
@@ -312,8 +320,8 @@ def pack_xtch_from_images(
         if chapter_entries:
             f.seek(data_end)
             chapter_offset = _write_chapters(f, chapter_entries)
-            header.flags = 0x01000000  # hasChaptersFlag is the high byte at 0x0B
-            header.toc_offset = int(chapter_offset)
+            header.has_chapters = 1
+            header.chapter_offset = int(chapter_offset)
             _write_header(f, header)
 
 
