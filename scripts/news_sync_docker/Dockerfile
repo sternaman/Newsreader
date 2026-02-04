@@ -10,14 +10,18 @@ RUN apt-get update \
        python3-pip \
        ca-certificates \
        fontconfig \
+       wget \
+       xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+RUN wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sh /dev/stdin
 
 WORKDIR /app
 
 COPY scripts/ /app/scripts/
 COPY recipes/ /app/recipes/
 
-RUN pip3 install --no-cache-dir pypdfium2 Pillow
+RUN pip3 install --no-cache-dir --upgrade pypdfium2 Pillow
 
 COPY scripts/news_sync_docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

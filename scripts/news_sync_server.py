@@ -221,6 +221,7 @@ def main() -> int:
         xtch_path = out_dir / xtch_name
 
         temp_dir = None
+        success = False
         try:
             try:
                 if src_type == "feed":
@@ -243,6 +244,7 @@ def main() -> int:
                         else:
                             recipe_path = (config_base / recipe_path).resolve()
                     run_epub_to_xtch(recipe_path, xtch_path, title, src_date, recipe_opts)
+                success = True
             except Exception as exc:
                 errors.append({"title": title, "error": str(exc)})
                 print(f"ERROR: {title} failed: {exc}")
@@ -251,9 +253,9 @@ def main() -> int:
         finally:
             if temp_dir and temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
-
-        entries.append({"title": title, "author": src_date, "href": xtch_name})
-        print(f"Wrote: {xtch_path}")
+        if success:
+            entries.append({"title": title, "author": src_date, "href": xtch_name})
+            print(f"Wrote: {xtch_path}")
 
     feed_path = out_dir / "news.xml"
     write_opds(feed_path, entries)
