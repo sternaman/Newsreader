@@ -1,0 +1,17 @@
+services:
+  news_sync:
+    build:
+      context: ../..
+      dockerfile: scripts/news_sync_docker/Dockerfile
+    ports:
+      - "8081:8080"
+    environment:
+      - CONFIG_PATH=/config/news_sources.json
+      - OUT_DIR=/data/news_out
+      - REFRESH_SECONDS=86400
+      - PORT=8080
+    volumes:
+      - ./data:/data
+      - ./secrets:/secrets:ro
+      - ./config:/config:ro
+    restart: unless-stopped

@@ -9,6 +9,7 @@
 #include <Xtc.h>
 #include <WiFi.h>
 #include <algorithm>
+#include <cctype>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -21,6 +22,90 @@
 
 namespace {
 constexpr const char* kNewsDir = "/News";
+
+std::string trimWhitespace(const std::string& input) {
+  size_t start = 0;
+  while (start < input.size() && std::isspace(static_cast<unsigned char>(input[start])) != 0) {
+    ++start;
+  }
+  size_t end = input.size();
+  while (end > start && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
+    --end;
+  }
+  return input.substr(start, end - start);
+}
+
+std::string toLowerCopy(std::string input) {
+  for (char& c : input) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return input;
+}
+
+bool fetchOpdsFeed(const std::string& url, OpdsParser& parser) {
+  OpdsParserStream stream{parser};
+  if (!HttpDownloader::fetchUrl(url, stream)) {
+    return false;
+  }
+  return static_cast<bool>(parser);
+}
+
+std::string resolveCategoryFeedUrl(const std::string& serverUrl, const std::string& categoryName) {
+  const std::string rootUrl = UrlUtils::buildUrl(serverUrl, "/opds");
+  OpdsParser parser;
+  if (!fetchOpdsFeed(rootUrl, parser)) {
+    return {};
+  }
+
+  const std::string targetTitle = toLowerCopy("By " + categoryName);
+  for (const auto& entry : parser.getEntries()) {
+    if (entry.type != OpdsEntryType::NAVIGATION || entry.href.empty()) {
+      continue;
+    }
+    if (toLowerCopy(entry.title) == targetTitle) {
+      return UrlUtils::buildUrl(serverUrl, entry.href);
+    }
+  }
+  return {};
+}
+
+std::string resolveFeedUrl(const std::string& serverUrl, const std::string& feedPath) {
+  const std::string trimmed = trimWhitespace(feedPath);
+  if (trimmed.empty()) {
+    return {};
+  }
+
+  if (trimmed.find('/') != std::string::npos || trimmed.find("opds") != std::string::npos ||
+      trimmed.find('?') != std::string::npos) {
+    return UrlUtils::buildUrl(serverUrl, trimmed);
+  }
+
+  const std::string categoryFeed = resolveCategoryFeedUrl(serverUrl, trimmed);
+  if (!categoryFeed.empty()) {
+    return categoryFeed;
+  }
+
+  return UrlUtils::buildUrl(serverUrl, trimmed);
+}
+
+std::vector<OpdsEntry> resolveNavigationBooks(const std::string& serverUrl, const std::vector<OpdsEntry>& navEntries) {
+  std::vector<OpdsEntry> resolved;
+  for (const auto& entry : navEntries) {
+    if (entry.type != OpdsEntryType::NAVIGATION || entry.href.empty()) {
+      continue;
+    }
+    OpdsParser parser;
+    const std::string navUrl = UrlUtils::buildUrl(serverUrl, entry.href);
+    if (!fetchOpdsFeed(navUrl, parser)) {
+      continue;
+    }
+    auto books = parser.getBooks();
+    if (!books.empty()) {
+      resolved.push_back(books.front());
+    }
+  }
+  return resolved;
+}
 }  // namespace
 
 void NewsSyncActivity::taskTrampoline(void* param) {
@@ -110,30 +195,40 @@ void NewsSyncActivity::startSync() {
   statusMessage = "Fetching feed...";
   updateRequired = true;
 
-  const std::string feedUrl = UrlUtils::buildUrl(serverUrl, feedPath);
+  const std::string feedUrl = resolveFeedUrl(serverUrl, feedPath);
+  if (feedUrl.empty()) {
+    setError("Invalid news feed path");
+    return;
+  }
   Serial.printf("[%lu] [NEWS] Fetching: %s\n", millis(), feedUrl.c_str());
 
   OpdsParser parser;
-  {
-    OpdsParserStream stream{parser};
-    if (!HttpDownloader::fetchUrl(feedUrl, stream)) {
-      setError("Failed to fetch feed");
+  if (!fetchOpdsFeed(feedUrl, parser)) {
+    setError("Failed to fetch feed");
+    return;
+  }
+
+  auto books = parser.getBooks();
+  if (books.empty()) {
+    std::vector<OpdsEntry> navEntries;
+    for (const auto& entry : parser.getEntries()) {
+      if (entry.type == OpdsEntryType::NAVIGATION) {
+        navEntries.push_back(entry);
+      }
+    }
+    if (navEntries.empty()) {
+      setError("No entries in feed");
+      return;
+    }
+
+    books = resolveNavigationBooks(serverUrl, navEntries);
+    if (books.empty()) {
+      setError("No books in feed");
       return;
     }
   }
 
-  if (!parser) {
-    setError("Failed to parse feed");
-    return;
-  }
-
-  const auto books = parser.getBooks();
-  if (books.empty()) {
-    setError("No books in feed");
-    return;
-  }
-
-  entries = books;
+  entries = std::move(books);
   selectorIndex = 0;
   if (autoMode) {
     statusMessage = "Auto syncing...";
