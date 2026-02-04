@@ -24,6 +24,7 @@ The server will:
 - Serve OPDS feed at `http://<host-ip>:8081/news.xml`
 - Refresh on schedule (default 08:00 and 20:00, local time)
 - Keep only the latest bundle per source (older files are deleted)
+- Prevent overlapping runs with a lock (skips if a build is already running)
 
 To change the refresh schedule, edit `SCHEDULE_TIMES` (comma-separated HH:MM) or
 set `REFRESH_SECONDS` in `docker-compose.yml`.

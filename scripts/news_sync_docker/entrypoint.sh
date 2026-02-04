@@ -6,11 +6,19 @@ OUT_DIR="${OUT_DIR:-/data/news_out}"
 REFRESH_SECONDS="${REFRESH_SECONDS:-86400}"
 SCHEDULE_TIMES="${SCHEDULE_TIMES:-}"
 PORT="${PORT:-8080}"
+LOCK_DIR="${LOCK_DIR:-/tmp/news_sync_lock}"
 
 mkdir -p "${OUT_DIR}"
 
 build_once() {
-  python3 /app/scripts/news_sync_server.py --config "${CONFIG_PATH}"
+  if mkdir "${LOCK_DIR}" 2>/dev/null; then
+    (
+      trap 'rmdir "${LOCK_DIR}"' EXIT
+      python3 /app/scripts/news_sync_server.py --config "${CONFIG_PATH}"
+    )
+  else
+    echo "News sync already running; skipping."
+  fi
 }
 
 build_once
