@@ -10,6 +10,7 @@ RUN apt-get update \
        python3-pip \
        ca-certificates \
        fontconfig \
+       libopengl0 \
        wget \
        xz-utils \
     && rm -rf /var/lib/apt/lists/*
