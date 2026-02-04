@@ -18,7 +18,11 @@
       "type": "recipe",
       "title": "WSJ",
       "recipe": "/app/recipes/wsj_x4.recipe",
-      "recipe_options": ["cookie_file=/secrets/wsj_cookies.txt"]
+      "recipe_options": [
+        "cookie_file=/secrets/wsj_cookies.txt",
+        "max_per_section=5",
+        "sort_popular=true"
+      ]
     },
     {
       "type": "recipe",
