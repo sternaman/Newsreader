@@ -149,6 +149,19 @@ def write_opds(feed_path: Path, entries: list[dict]) -> None:
     feed_path.write_text(feed, encoding="utf-8")
 
 
+def cleanup_old_bundles(out_dir: Path, title: str, current_name: str) -> None:
+    prefix = sanitize_filename(title)
+    if not prefix:
+        return
+    for item in out_dir.glob(f"{prefix}-*.xtch"):
+        if item.name == current_name:
+            continue
+        try:
+            item.unlink()
+        except OSError:
+            pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate XTCH news bundle + serve OPDS feed")
     parser.add_argument("--config", help="Path to JSON config for multiple sources")
@@ -186,12 +199,14 @@ def main() -> int:
         host = config.get("host", host)
         port = int(config.get("port", port))
         continue_on_error = bool(config.get("continue_on_error", continue_on_error))
+        keep_latest_only = bool(config.get("keep_latest_only", False))
         sources = config.get("sources", [])
         if not sources:
             raise SystemExit("Config has no sources")
     else:
         if not args.recipe and not args.feed_url:
             raise SystemExit("Specify --recipe or --feed-url (or use --config)")
+        keep_latest_only = False
         sources = [{
             "type": "feed" if args.feed_url else "recipe",
             "title": args.title,
@@ -213,6 +228,7 @@ def main() -> int:
         recipe_opts = src.get("recipe_options") or src.get("recipe-option") or []
         recipe_opts = resolve_recipe_options(recipe_opts, config_dir or config_base)
         max_articles = int(src.get("max_articles", args.max_articles))
+        source_keep_latest = bool(src.get("keep_latest_only", keep_latest_only))
         filename = src.get("filename")
         if filename:
             xtch_name = filename
@@ -254,6 +270,8 @@ def main() -> int:
             if temp_dir and temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
         if success:
+            if source_keep_latest:
+                cleanup_old_bundles(out_dir, title, xtch_name)
             entries.append({"title": title, "author": src_date, "href": xtch_name})
             print(f"Wrote: {xtch_path}")
 
