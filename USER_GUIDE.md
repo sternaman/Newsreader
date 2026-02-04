@@ -220,3 +220,4 @@ Accessible by pressing **Confirm** while inside a book.
 Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
 
 * **Images:** Embedded images in e-books will not render.
+* **News/XTCH navigation:** Add article-level navigation (prev/next article), faster chapter list browsing, and section headers for pre-rendered news bundles. If needed, reference implementation ideas from https://github.com/ngxson/pluspoint-reader/pull/2.
