@@ -22,9 +22,10 @@ docker compose up -d --build
 The server will:
 - Generate XTCH files into `scripts/news_sync_docker/data/news_out`
 - Serve OPDS feed at `http://<host-ip>:8081/news.xml`
-- Refresh once per day (default 86400 seconds)
+- Refresh on schedule (default 08:00 and 20:00, local time)
 
-To change the refresh interval, edit `REFRESH_SECONDS` in `docker-compose.yml`.
+To change the refresh schedule, edit `SCHEDULE_TIMES` (comma-separated HH:MM) or
+set `REFRESH_SECONDS` in `docker-compose.yml`.
 
 ## X4 Settings
 

@@ -8,9 +8,11 @@ services:
     environment:
       - CONFIG_PATH=/config/news_sources.json
       - OUT_DIR=/data/news_out
-      - REFRESH_SECONDS=86400
+      - REFRESH_SECONDS=43200
+      - SCHEDULE_TIMES=08:00,20:00
       - PORT=8080
       - QTWEBENGINE_DISABLE_SANDBOX=1
+      - TZ=America/Chicago
     volumes:
       - ./data:/data
       - ./secrets:/secrets:ro
