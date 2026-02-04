@@ -91,6 +91,16 @@ def absolutize_href(href):
 def safe_text(s):
     return s or ''
 
+def _bool_option(value, default=True):
+    if value is None:
+        return default
+    val = str(value).strip().lower()
+    if val in ('0', 'false', 'no', 'off'):
+        return False
+    if val in ('1', 'true', 'yes', 'on'):
+        return True
+    return default
+
 
 def _chapter_label(section, title):
     section = safe_text(section).strip()
@@ -159,7 +169,7 @@ class NewYorkTimes(BasicNewsRecipe):
         em, blockquote { color: #202020; }
         .sc { font-variant: small-caps; }
         .lbl { font-size:small; color:#404040; }
-        img { display:block; margin:0.6em auto; max-width:75%; max-height:45%; width:auto; height:auto; }
+        img { display:block; margin:0.6em auto; max-width:70%; max-height:40%; width:auto; height:auto; }
         .article { page-break-after: always; }
         .toc-page { page-break-after: always; }
         .toc-section-title { font-size:80%; font-weight:bold; letter-spacing:0.04em; text-transform:uppercase; color:#404040; margin-top:0.8em; }
@@ -236,6 +246,11 @@ class NewYorkTimes(BasicNewsRecipe):
             'short': 'Path to Netscape cookies.txt for nytimes.com (optional)',
             'long': 'Export cookies from your browser and point this to the file',
             'default': ''
+        },
+        'emit_chapter_markers': {
+            'short': 'Emit X4CHAP markers for XTCH (default: yes)',
+            'long': 'Disable for EPUB to avoid showing markers in body',
+            'default': 'yes',
         }
     }
 
@@ -255,6 +270,7 @@ class NewYorkTimes(BasicNewsRecipe):
         if c and isinstance(c, str):
             if c.lower() == 'yes':
                 self.compress_news_images = True
+        self.emit_chapter_markers = _bool_option(self.recipe_specific_options.get('emit_chapter_markers'), True)
         cookie_file = self.recipe_specific_options.get('cookie_file')
         if cookie_file and isinstance(cookie_file, str) and os.path.exists(cookie_file):
             jar = MozillaCookieJar(cookie_file)
@@ -334,8 +350,9 @@ class NewYorkTimes(BasicNewsRecipe):
             '<style type="text/css">' + css + '</style>',
             '</head>',
             '<body class="toc-page"><h1>Contents</h1>',
-            '<div class="x4-chap-marker">X4CHAP::Contents</div>',
         ]
+        if self.emit_chapter_markers:
+            parts.append('<div class="x4-chap-marker">X4CHAP::Contents</div>')
         for feed_idx, section, titles in sections:
             sec = escape(safe_text(section).strip())
             if not sec:
@@ -437,8 +454,9 @@ class NewYorkTimes(BasicNewsRecipe):
             title = safe_text(getattr(article, 'title', '')).strip()
         url = getattr(article, 'url', '')
         section = self.section_by_url.get(url, '')
-        label = _chapter_label(section, title)
-        _insert_chap_marker(soup, wrapper, label)
+        if self.emit_chapter_markers:
+            label = _chapter_label(section, title)
+            _insert_chap_marker(soup, wrapper, label)
 
 
 def preloaded_data(soup):

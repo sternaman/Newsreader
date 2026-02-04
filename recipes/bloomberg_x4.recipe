@@ -13,6 +13,16 @@ from calibre.web.feeds.news import BasicNewsRecipe, classes
 def safe_text(s):
     return s or ''
 
+def _bool_option(value, default=True):
+    if value is None:
+        return default
+    val = str(value).strip().lower()
+    if val in ('0', 'false', 'no', 'off'):
+        return False
+    if val in ('1', 'true', 'yes', 'on'):
+        return True
+    return default
+
 def _chapter_label(section, title):
     section = safe_text(section).strip()
     title = safe_text(title).strip()
@@ -49,7 +59,7 @@ def get_contents(x):
         img_url = ''
         if isinstance(img_urls, dict):
             img_url = (
-                img_urls.get('default') or img_urls.get('medium') or img_urls.get('large') or
+                img_urls.get('medium') or img_urls.get('default') or img_urls.get('large') or
                 img_urls.get('small') or img_urls.get('thumb')
             )
         caption = safe_text(x.get('caption'))
@@ -102,7 +112,7 @@ class BloombergX4(BasicNewsRecipe):
         .subhead, .cap span { font-style:italic; color:#202020; }
         em, blockquote { color:#202020; }
         .cat { font-size:small; color:gray; }
-        img { display:block; margin:0.6em auto; max-width:75%; max-height:45%; width:auto; height:auto; }
+        img { display:block; margin:0.6em auto; max-width:70%; max-height:40%; width:auto; height:auto; }
         .img, .img-cap, .news-figure-caption-text { font-size:small; text-align:center; }
         .corr { font-size:small; font-style:italic; color:#404040; }
         .chart { font-size:small; }
@@ -120,8 +130,17 @@ class BloombergX4(BasicNewsRecipe):
             'short': 'Oldest article to download from this news source. In days ',
             'long': 'For example, 0.5, gives you articles for the past 12 hours',
             'default': str(oldest_article),
-        }
+        },
+        'emit_chapter_markers': {
+            'short': 'Emit X4CHAP markers for XTCH (default: yes)',
+            'long': 'Disable for EPUB to avoid showing markers in body',
+            'default': 'yes',
+        },
     }
+
+    def __init__(self, *args, **kwargs):
+        BasicNewsRecipe.__init__(self, *args, **kwargs)
+        self.emit_chapter_markers = _bool_option(self.recipe_specific_options.get('emit_chapter_markers'), True)
 
     def parse_index(self):
         d = self.recipe_specific_options.get('days')
@@ -190,8 +209,9 @@ class BloombergX4(BasicNewsRecipe):
             '<style type="text/css">' + css + '</style>',
             '</head>',
             '<body class="toc-page"><h1>Contents</h1>',
-            '<div class="x4-chap-marker">X4CHAP::Contents</div>',
         ]
+        if self.emit_chapter_markers:
+            parts.append('<div class="x4-chap-marker">X4CHAP::Contents</div>')
         for feed_idx, section, titles in sections:
             sec = escape(safe_text(section).strip())
             if not sec:
@@ -214,7 +234,9 @@ class BloombergX4(BasicNewsRecipe):
         title = '<h1 title="{}">'.format(data.get('longURL', '')) + article_title + '</h1>'
 
         cat = subhead = lede = auth = caption = ''
-        chap_marker = '<div class="x4-chap-marker">X4CHAP::' + escape(_chapter_label(data.get('primaryCategory'), article_title)) + '</div>'
+        chap_marker = ''
+        if self.emit_chapter_markers:
+            chap_marker = '<div class="x4-chap-marker">X4CHAP::' + escape(_chapter_label(data.get('primaryCategory'), article_title)) + '</div>'
 
         if data.get('primaryCategory'):
             cat = '<div class="cat">' + data['primaryCategory'] + '</div>'
@@ -252,7 +274,7 @@ class BloombergX4(BasicNewsRecipe):
             img_url = ''
             if isinstance(img_urls, dict):
                 img_url = (
-                    img_urls.get('default') or img_urls.get('medium') or img_urls.get('large') or
+                    img_urls.get('medium') or img_urls.get('default') or img_urls.get('large') or
                     img_urls.get('small') or img_urls.get('thumb')
                 )
             if img_url and img_url.rsplit('/', 1)[0] not in body:

@@ -85,6 +85,22 @@ def resolve_recipe_options(recipe_opts: list, base_dir: Path | None) -> list[str
     return resolved
 
 
+def has_recipe_option(recipe_opts: list[str], key: str) -> bool:
+    key = key.strip()
+    for opt in recipe_opts:
+        if not opt:
+            continue
+        if "=" in opt:
+            opt_key = opt.split("=", 1)[0].strip()
+        elif ":" in opt:
+            opt_key = opt.split(":", 1)[0].strip()
+        else:
+            opt_key = opt.strip()
+        if opt_key == key:
+            return True
+    return False
+
+
 def _find_ebook_convert() -> str:
     exe = shutil.which("ebook-convert")
     if exe:
@@ -264,6 +280,8 @@ def main() -> int:
         source_format = str(src.get("format", output_format)).lower()
         if source_format not in ("xtch", "epub"):
             raise SystemExit(f"Unsupported format '{source_format}' for source '{title}'")
+        if source_format == "epub" and not has_recipe_option(recipe_opts, "emit_chapter_markers"):
+            recipe_opts = list(recipe_opts) + ["emit_chapter_markers=false"]
         filename = src.get("filename")
         if filename:
             out_name = filename

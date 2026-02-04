@@ -27,6 +27,16 @@ from calibre.web.feeds.news import BasicNewsRecipe, classes
 def safe_text(s):
     return s or ''
 
+def _bool_option(value, default=True):
+    if value is None:
+        return default
+    val = str(value).strip().lower()
+    if val in ('0', 'false', 'no', 'off'):
+        return False
+    if val in ('1', 'true', 'yes', 'on'):
+        return True
+    return default
+
 
 def _chapter_label(section, title):
     section = safe_text(section).strip()
@@ -72,7 +82,7 @@ class Substack(BasicNewsRecipe):
     extra_css = '''
         body { font-family: Bookerly, serif; }
         .captioned-image-container, .image-container, .image-caption {font-size: small;}
-        img { display:block; margin:0.6em auto; max-width:75%; max-height:45%; width:auto; height:auto; }
+        img { display:block; margin:0.6em auto; max-width:70%; max-height:40%; width:auto; height:auto; }
         .article { page-break-after: always; }
         .toc-page { page-break-after: always; }
         .toc-section-title { font-size:80%; font-weight:bold; letter-spacing:0.04em; text-transform:uppercase; color:#404040; margin-top:0.8em; }
@@ -115,6 +125,11 @@ class Substack(BasicNewsRecipe):
             'long': 'enter yes',
             'default': 'no',
         },
+        'emit_chapter_markers': {
+            'short': 'Emit X4CHAP markers for XTCH (default: yes)',
+            'long': 'Disable for EPUB to avoid showing markers in body',
+            'default': 'yes',
+        },
     }
 
     def __init__(self, *args, **kwargs):
@@ -126,6 +141,7 @@ class Substack(BasicNewsRecipe):
         if r and isinstance(r, str):
             if r.lower().strip() == 'yes':
                 self.reverse_article_order = True
+        self.emit_chapter_markers = _bool_option(self.recipe_specific_options.get('emit_chapter_markers'), True)
 
     # Every Substack publication has an RSS feed at https://{name}.substack.com/feed.
     # The same URL provides either all posts, or all free posts + previews of paid posts,
@@ -182,8 +198,9 @@ class Substack(BasicNewsRecipe):
             '<style type="text/css">' + css + '</style>',
             '</head>',
             '<body class="toc-page"><h1>Contents</h1>',
-            '<div class="x4-chap-marker">X4CHAP::Contents</div>',
         ]
+        if self.emit_chapter_markers:
+            parts.append('<div class="x4-chap-marker">X4CHAP::Contents</div>')
         for feed_idx, section, titles in sections:
             sec = escape(safe_text(section).strip())
             if not sec:
@@ -256,5 +273,6 @@ class Substack(BasicNewsRecipe):
             title = self.tag_to_string(h1).strip()
         if not title:
             title = safe_text(getattr(article, 'title', '')).strip()
-        label = _chapter_label('', title)
-        _insert_chap_marker(soup, wrapper, label)
+        if self.emit_chapter_markers:
+            label = _chapter_label('', title)
+            _insert_chap_marker(soup, wrapper, label)

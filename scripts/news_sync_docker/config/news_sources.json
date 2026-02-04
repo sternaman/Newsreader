@@ -7,12 +7,14 @@
     {
       "type": "recipe",
       "title": "Bloomberg",
-      "recipe": "/app/recipes/bloomberg_x4.recipe"
+      "recipe": "/app/recipes/bloomberg_x4.recipe",
+      "recipe_options": ["emit_chapter_markers=false"]
     },
     {
       "type": "recipe",
       "title": "Businessweek",
-      "recipe": "/app/recipes/businessweek_x4.recipe"
+      "recipe": "/app/recipes/businessweek_x4.recipe",
+      "recipe_options": ["emit_chapter_markers=false"]
     },
     {
       "type": "recipe",
@@ -20,21 +22,32 @@
       "recipe": "/app/recipes/wsj_x4.recipe",
       "recipe_options": [
         "cookie_file=/secrets/wsj_cookies.txt",
+        "res=600",
         "max_per_section=5",
-        "sort_popular=true"
+        "sort_popular=true",
+        "emit_chapter_markers=false"
       ]
     },
     {
       "type": "recipe",
       "title": "NYTimes",
       "recipe": "/app/recipes/nytimes_x4.recipe",
-      "recipe_options": ["cookie_file=/secrets/nyt_cookies.txt"]
+      "recipe_options": [
+        "cookie_file=/secrets/nyt_cookies.txt",
+        "res=articleInline",
+        "emit_chapter_markers=false"
+      ]
     },
     {
       "type": "recipe",
       "title": "ExecSum",
       "recipe": "/app/recipes/substack_x4.recipe",
-      "recipe_options": ["auths=@execsum", "days=365"]
+      "recipe_options": [
+        "auths=@execsum",
+        "days=365",
+        "res=600",
+        "emit_chapter_markers=false"
+      ]
     }
   ]
 }

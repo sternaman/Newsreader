@@ -18,6 +18,16 @@ from calibre.web.feeds.news import BasicNewsRecipe
 def safe_text(s):
     return s or ''
 
+def _bool_option(value, default=True):
+    if value is None:
+        return default
+    val = str(value).strip().lower()
+    if val in ('0', 'false', 'no', 'off'):
+        return False
+    if val in ('1', 'true', 'yes', 'on'):
+        return True
+    return default
+
 
 _NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
@@ -242,6 +252,11 @@ class WSJX4(BasicNewsRecipe):
             'long': 'Export cookies from your browser and point this to the file',
             'default': ''
         },
+        'emit_chapter_markers': {
+            'short': 'Emit X4CHAP markers for XTCH (default: yes)',
+            'long': 'Disable for EPUB to avoid showing markers in body',
+            'default': 'yes',
+        },
         'max_per_section': {
             'short': 'Maximum articles per section (default 5)',
             'long': 'Set to 0 to keep all articles',
@@ -260,7 +275,7 @@ class WSJX4(BasicNewsRecipe):
         [data-type="tagline"] { font-style:italic; color:#202020; }
         .auth, time { font-size:small; }
         .sub, em, i { color: #202020; }
-        img { display:block; margin:0.6em auto; max-width:75%; max-height:45%; width:auto; height:auto; }
+        img { display:block; margin:0.6em auto; max-width:70%; max-height:40%; width:auto; height:auto; }
         .figc { font-size:small; text-align:center; }
         .standfirst { font-style:italic; }
         .article { page-break-after: always; }
@@ -325,6 +340,7 @@ class WSJX4(BasicNewsRecipe):
         BasicNewsRecipe.__init__(self, *args, **kwargs)
         self.section_by_url = {}
         self._cookie_jar = None
+        self.emit_chapter_markers = _bool_option(self.recipe_specific_options.get('emit_chapter_markers'), True)
         cookie_file = self.recipe_specific_options.get('cookie_file')
         if cookie_file and isinstance(cookie_file, str) and os.path.exists(cookie_file):
             jar = MozillaCookieJar(cookie_file)
@@ -602,8 +618,9 @@ class WSJX4(BasicNewsRecipe):
             '<style type="text/css">' + css + '</style>',
             '</head>',
             '<body class="toc-page"><h1>Contents</h1>',
-            '<div class="x4-chap-marker">X4CHAP::Contents</div>',
         ]
+        if self.emit_chapter_markers:
+            parts.append('<div class="x4-chap-marker">X4CHAP::Contents</div>')
         for feed_idx, section, titles in sections:
             sec = escape(safe_text(section).strip())
             if not sec:
@@ -669,6 +686,7 @@ class WSJX4(BasicNewsRecipe):
             title = safe_text(getattr(article, 'title', '')).strip()
         url = getattr(article, 'url', '')
         section = self.section_by_url.get(url, '')
-        label = _chapter_label(section, title)
-        _insert_chap_marker(soup, wrapper, label)
+        if self.emit_chapter_markers:
+            label = _chapter_label(section, title)
+            _insert_chap_marker(soup, wrapper, label)
 
