@@ -1,5 +1,6 @@
 {
   "out_dir": "/data/news_out",
+  "output_format": "epub",
   "keep_latest_only": true,
   "continue_on_error": true,
   "sources": [

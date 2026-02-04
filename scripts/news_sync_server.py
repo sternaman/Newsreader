@@ -85,6 +85,35 @@ def resolve_recipe_options(recipe_opts: list, base_dir: Path | None) -> list[str
     return resolved
 
 
+def _find_ebook_convert() -> str:
+    exe = shutil.which("ebook-convert")
+    if exe:
+        return exe
+    default = Path(r"C:\Program Files\Calibre2\ebook-convert.exe")
+    if default.exists():
+        return str(default)
+    raise FileNotFoundError("ebook-convert not found in PATH or default install location")
+
+
+def _normalize_recipe_option(opt: str) -> str:
+    if "=" in opt:
+        key, val = opt.split("=", 1)
+        return f"{key}:{val}"
+    return opt
+
+
+def run_recipe_to_epub(recipe: Path, out_epub: Path, title: str, date_str: str, recipe_opts: list[str]) -> None:
+    ebook_convert = _find_ebook_convert()
+    cmd = [ebook_convert, str(recipe), str(out_epub)]
+    if title:
+        cmd += ["--title", title]
+    if date_str:
+        cmd += ["--authors", date_str]
+    for opt in recipe_opts:
+        cmd += ["--recipe-specific-option", _normalize_recipe_option(opt)]
+    subprocess.run(cmd, check=True)
+
+
 def run_epub_to_xtch(recipe: Path, out_xtch: Path, title: str, date_str: str, recipe_opts: list[str]) -> None:
     script = Path(__file__).resolve().parent / "epub_to_xtch.py"
     cmd = [sys.executable, str(script), "--recipe", str(recipe), "--out", str(out_xtch), "--title", title, "--date", date_str]
@@ -128,13 +157,14 @@ def write_opds(feed_path: Path, entries: list[dict]) -> None:
         title_esc = xml_escape(title)
         author_esc = xml_escape(author)
         href_esc = xml_escape(href)
+        mime = entry.get("mime", "application/octet-stream")
         entry_xml.append(
             "  <entry>\n"
             f"    <id>urn:news:{sanitize_filename(title)}:{author}</id>\n"
             f"    <title>{title_esc}</title>\n"
             f"    <author><name>{author_esc}</name></author>\n"
             f"    <updated>{updated}</updated>\n"
-            f"    <link rel=\"http://opds-spec.org/acquisition\" href=\"{href_esc}\" type=\"application/octet-stream\"/>\n"
+            f"    <link rel=\"http://opds-spec.org/acquisition\" href=\"{href_esc}\" type=\"{mime}\"/>\n"
             "  </entry>"
         )
     feed = (
@@ -149,11 +179,11 @@ def write_opds(feed_path: Path, entries: list[dict]) -> None:
     feed_path.write_text(feed, encoding="utf-8")
 
 
-def cleanup_old_bundles(out_dir: Path, title: str, current_name: str) -> None:
+def cleanup_old_bundles(out_dir: Path, title: str, current_name: str, extension: str) -> None:
     prefix = sanitize_filename(title)
     if not prefix:
         return
-    for item in out_dir.glob(f"{prefix}-*.xtch"):
+    for item in out_dir.glob(f"{prefix}-*.{extension}"):
         if item.name == current_name:
             continue
         try:
@@ -200,6 +230,7 @@ def main() -> int:
         port = int(config.get("port", port))
         continue_on_error = bool(config.get("continue_on_error", continue_on_error))
         keep_latest_only = bool(config.get("keep_latest_only", False))
+        output_format = str(config.get("output_format", "xtch")).lower()
         sources = config.get("sources", [])
         if not sources:
             raise SystemExit("Config has no sources")
@@ -207,6 +238,7 @@ def main() -> int:
         if not args.recipe and not args.feed_url:
             raise SystemExit("Specify --recipe or --feed-url (or use --config)")
         keep_latest_only = False
+        output_format = "xtch"
         sources = [{
             "type": "feed" if args.feed_url else "recipe",
             "title": args.title,
@@ -229,12 +261,16 @@ def main() -> int:
         recipe_opts = resolve_recipe_options(recipe_opts, config_dir or config_base)
         max_articles = int(src.get("max_articles", args.max_articles))
         source_keep_latest = bool(src.get("keep_latest_only", keep_latest_only))
+        source_format = str(src.get("format", output_format)).lower()
+        if source_format not in ("xtch", "epub"):
+            raise SystemExit(f"Unsupported format '{source_format}' for source '{title}'")
         filename = src.get("filename")
         if filename:
-            xtch_name = filename
+            out_name = filename
         else:
-            xtch_name = f"{sanitize_filename(title)}-{src_date}.xtch"
-        xtch_path = out_dir / xtch_name
+            extension = "epub" if source_format == "epub" else "xtch"
+            out_name = f"{sanitize_filename(title)}-{src_date}.{extension}"
+        out_path = out_dir / out_name
 
         temp_dir = None
         success = False
@@ -248,7 +284,10 @@ def main() -> int:
                     temp_dir = Path(tempfile.mkdtemp(prefix="feed_recipe_"))
                     temp_recipe = temp_dir / "feed.recipe"
                     write_feed_recipe(temp_recipe, title, feed_url, max_articles, feeds=feeds)
-                    run_epub_to_xtch(temp_recipe, xtch_path, title, src_date, recipe_opts)
+                    if source_format == "epub":
+                        run_recipe_to_epub(temp_recipe, out_path, title, src_date, recipe_opts)
+                    else:
+                        run_epub_to_xtch(temp_recipe, out_path, title, src_date, recipe_opts)
                 else:
                     recipe_path = src.get("recipe") or args.recipe
                     if not recipe_path:
@@ -259,7 +298,10 @@ def main() -> int:
                             recipe_path = (config_dir / recipe_path).resolve()
                         else:
                             recipe_path = (config_base / recipe_path).resolve()
-                    run_epub_to_xtch(recipe_path, xtch_path, title, src_date, recipe_opts)
+                    if source_format == "epub":
+                        run_recipe_to_epub(recipe_path, out_path, title, src_date, recipe_opts)
+                    else:
+                        run_epub_to_xtch(recipe_path, out_path, title, src_date, recipe_opts)
                 success = True
             except Exception as exc:
                 errors.append({"title": title, "error": str(exc)})
@@ -271,9 +313,11 @@ def main() -> int:
                 shutil.rmtree(temp_dir, ignore_errors=True)
         if success:
             if source_keep_latest:
-                cleanup_old_bundles(out_dir, title, xtch_name)
-            entries.append({"title": title, "author": src_date, "href": xtch_name})
-            print(f"Wrote: {xtch_path}")
+                extension = out_path.suffix.lstrip(".") if out_path.suffix else "xtch"
+                cleanup_old_bundles(out_dir, title, out_name, extension)
+            mime = "application/epub+zip" if source_format == "epub" else "application/octet-stream"
+            entries.append({"title": title, "author": src_date, "href": out_name, "mime": mime})
+            print(f"Wrote: {out_path}")
 
     feed_path = out_dir / "news.xml"
     write_opds(feed_path, entries)
