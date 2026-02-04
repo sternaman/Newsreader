@@ -80,6 +80,54 @@ def _text_from_content(content):
     return ''
 
 
+def _extract_body_blocks(article_data):
+    if not isinstance(article_data, dict):
+        return []
+    candidates = [
+        article_data.get('flattenedBody'),
+        article_data.get('body'),
+        article_data.get('contentElements'),
+        article_data.get('content'),
+        article_data.get('elements'),
+    ]
+    for body in candidates:
+        if isinstance(body, list) and body:
+            return body
+        if isinstance(body, dict):
+            for key in ('contentElements', 'body', 'elements', 'flattenedBody', 'content'):
+                sub = body.get(key)
+                if isinstance(sub, list) and sub:
+                    return sub
+    return []
+
+
+def _body_text_length(blocks):
+    total = 0
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get('type') or block.get('__typename')
+        if btype in ('paragraph', 'heading', 'subhead'):
+            total += len(_text_from_content(block.get('content') or block.get('textAndDecorations')))
+    return total
+
+
+def _extract_popularity(mobi):
+    if not isinstance(mobi, dict):
+        return None
+    metrics = mobi.get('metrics')
+    if isinstance(metrics, dict):
+        for key in ('mostReadScore', 'score', 'views', 'viewCount', 'engagementScore'):
+            val = metrics.get(key)
+            if isinstance(val, (int, float)):
+                return val
+    for key in ('mostReadScore', 'score', 'views', 'viewCount', 'engagementScore', 'rank'):
+        val = mobi.get(key)
+        if isinstance(val, (int, float)):
+            return val
+    return None
+
+
 def _format_dt(dt_str):
     if not dt_str or not isinstance(dt_str, str):
         return ''
@@ -193,6 +241,16 @@ class WSJX4(BasicNewsRecipe):
             'short': 'Path to Netscape cookies.txt for wsj.com (optional)',
             'long': 'Export cookies from your browser and point this to the file',
             'default': ''
+        },
+        'max_per_section': {
+            'short': 'Maximum articles per section (default 5)',
+            'long': 'Set to 0 to keep all articles',
+            'default': '5',
+        },
+        'sort_popular': {
+            'short': 'Sort by popularity when available (default: false)',
+            'long': 'Uses WSJ metrics if provided; falls back to editorial order',
+            'default': 'false',
         }
     }
 
@@ -217,7 +275,7 @@ class WSJX4(BasicNewsRecipe):
         dict(name=['h1', 'h2']),
         dict(attrs={'aria-describedby': 'big-top-caption'}),
         dict(attrs={'id': 'big-top-caption'}),
-        dict(name='article', attrs={'style': lambda x: x and 'article-body' in x}),
+        dict(name='article'),
     ]
 
     remove_tags = [
@@ -327,8 +385,11 @@ class WSJX4(BasicNewsRecipe):
 
         page_props = data.get('props', {}).get('pageProps', {})
         article_data = page_props.get('articleData', {})
-        body = article_data.get('flattenedBody') or []
+        body = _extract_body_blocks(article_data)
         if not body:
+            return raw
+        if _body_text_length(body) < 800:
+            # Likely truncated; fall back to HTML parsing.
             return raw
 
         headline = _text_from_content(article_data.get('headline'))
@@ -492,6 +553,14 @@ class WSJX4(BasicNewsRecipe):
             ]
 
             articles = []
+            max_per_section = self.recipe_specific_options.get('max_per_section')
+            try:
+                max_per_section = int(max_per_section)
+            except Exception:
+                max_per_section = 0
+            sort_popular = str(self.recipe_specific_options.get('sort_popular') or '').lower() in (
+                '1', 'true', 'yes', 'on'
+            )
 
             for art in sec_data:
                 for arts in art['collectionItems']:
@@ -503,8 +572,13 @@ class WSJX4(BasicNewsRecipe):
                         desc = ''
                     url = arts['content']['sourceUrl']
                     self.log('          ', title, '\n\t', desc, '\n\t', url)
-                    articles.append({'title': title, 'description': desc, 'url': url})
+                    popularity = _extract_popularity(mobi)
+                    articles.append({'title': title, 'description': desc, 'url': url, 'popularity': popularity})
                     self.section_by_url[url] = section
+            if sort_popular:
+                articles.sort(key=lambda x: x.get('popularity') if x.get('popularity') is not None else -1, reverse=True)
+            if max_per_section and max_per_section > 0:
+                articles = articles[:max_per_section]
             feeds.append((section, articles))
         return feeds
 
