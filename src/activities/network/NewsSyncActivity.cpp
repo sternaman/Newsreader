@@ -13,8 +13,8 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
-#include "ScreenComponents.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/StringUtils.h"
@@ -463,7 +463,7 @@ void NewsSyncActivity::render() const {
       constexpr int barHeight = 20;
       constexpr int barX = 50;
       const int barY = pageHeight / 2 + 20;
-      ScreenComponents::drawProgressBar(renderer, barX, barY, barWidth, barHeight, downloadProgress, downloadTotal);
+      GUI.drawProgressBar(renderer, Rect{barX, barY, barWidth, barHeight}, downloadProgress, downloadTotal);
     }
   } else if (state == SyncState::COMPLETE) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 20, "Sync complete", true, EpdFontFamily::BOLD);
@@ -477,10 +477,10 @@ void NewsSyncActivity::render() const {
 
   if (state == SyncState::SELECT_SOURCE) {
     const auto labels = mappedInput.mapLabels("Back", "Download", "", "");
-    renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == SyncState::ERROR || state == SyncState::COMPLETE || state == SyncState::CHECK_WIFI) {
     const auto labels = mappedInput.mapLabels("Back", "Select", "", "");
-    renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 
   renderer.displayBuffer();

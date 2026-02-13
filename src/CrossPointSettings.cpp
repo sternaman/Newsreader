@@ -22,8 +22,59 @@ void readAndValidate(FsFile& file, uint8_t& member, const uint8_t maxValue) {
 namespace {
 constexpr uint8_t SETTINGS_FILE_VERSION = 1;
 // Increment this when adding new persisted settings fields
-constexpr uint8_t SETTINGS_COUNT = 25;
+constexpr uint8_t SETTINGS_COUNT = 32;
 constexpr char SETTINGS_FILE[] = "/.crosspoint/settings.bin";
+
+// Validate front button mapping to ensure each hardware button is unique.
+// If duplicates are detected, reset to the default physical order to prevent invalid mappings.
+void validateFrontButtonMapping(CrossPointSettings& settings) {
+  // Snapshot the logical->hardware mapping so we can compare for duplicates.
+  const uint8_t mapping[] = {settings.frontButtonBack, settings.frontButtonConfirm, settings.frontButtonLeft,
+                             settings.frontButtonRight};
+  for (size_t i = 0; i < 4; i++) {
+    for (size_t j = i + 1; j < 4; j++) {
+      if (mapping[i] == mapping[j]) {
+        // Duplicate detected: restore the default physical order (Back, Confirm, Left, Right).
+        settings.frontButtonBack = CrossPointSettings::FRONT_HW_BACK;
+        settings.frontButtonConfirm = CrossPointSettings::FRONT_HW_CONFIRM;
+        settings.frontButtonLeft = CrossPointSettings::FRONT_HW_LEFT;
+        settings.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
+        return;
+      }
+    }
+  }
+}
+
+// Convert legacy front button layout into explicit logical->hardware mapping.
+void applyLegacyFrontButtonLayout(CrossPointSettings& settings) {
+  switch (static_cast<CrossPointSettings::FRONT_BUTTON_LAYOUT>(settings.frontButtonLayout)) {
+    case CrossPointSettings::LEFT_RIGHT_BACK_CONFIRM:
+      settings.frontButtonBack = CrossPointSettings::FRONT_HW_LEFT;
+      settings.frontButtonConfirm = CrossPointSettings::FRONT_HW_RIGHT;
+      settings.frontButtonLeft = CrossPointSettings::FRONT_HW_BACK;
+      settings.frontButtonRight = CrossPointSettings::FRONT_HW_CONFIRM;
+      break;
+    case CrossPointSettings::LEFT_BACK_CONFIRM_RIGHT:
+      settings.frontButtonBack = CrossPointSettings::FRONT_HW_CONFIRM;
+      settings.frontButtonConfirm = CrossPointSettings::FRONT_HW_LEFT;
+      settings.frontButtonLeft = CrossPointSettings::FRONT_HW_BACK;
+      settings.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
+      break;
+    case CrossPointSettings::BACK_CONFIRM_RIGHT_LEFT:
+      settings.frontButtonBack = CrossPointSettings::FRONT_HW_BACK;
+      settings.frontButtonConfirm = CrossPointSettings::FRONT_HW_CONFIRM;
+      settings.frontButtonLeft = CrossPointSettings::FRONT_HW_RIGHT;
+      settings.frontButtonRight = CrossPointSettings::FRONT_HW_LEFT;
+      break;
+    case CrossPointSettings::BACK_CONFIRM_LEFT_RIGHT:
+    default:
+      settings.frontButtonBack = CrossPointSettings::FRONT_HW_BACK;
+      settings.frontButtonConfirm = CrossPointSettings::FRONT_HW_CONFIRM;
+      settings.frontButtonLeft = CrossPointSettings::FRONT_HW_LEFT;
+      settings.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
+      break;
+  }
+}
 }  // namespace
 
 bool CrossPointSettings::saveToFile() const {
@@ -42,7 +93,7 @@ bool CrossPointSettings::saveToFile() const {
   serialization::writePod(outputFile, shortPwrBtn);
   serialization::writePod(outputFile, statusBar);
   serialization::writePod(outputFile, orientation);
-  serialization::writePod(outputFile, frontButtonLayout);
+  serialization::writePod(outputFile, frontButtonLayout);  // legacy
   serialization::writePod(outputFile, sideButtonLayout);
   serialization::writePod(outputFile, fontFamily);
   serialization::writePod(outputFile, fontSize);
@@ -53,7 +104,6 @@ bool CrossPointSettings::saveToFile() const {
   serialization::writePod(outputFile, screenMargin);
   serialization::writePod(outputFile, sleepScreenCoverMode);
   serialization::writeString(outputFile, std::string(opdsServerUrl));
-  serialization::writeString(outputFile, std::string(opdsNewsPath));
   serialization::writePod(outputFile, textAntiAliasing);
   serialization::writePod(outputFile, hideBatteryPercentage);
   serialization::writePod(outputFile, longPressChapterSkip);
@@ -61,6 +111,14 @@ bool CrossPointSettings::saveToFile() const {
   serialization::writeString(outputFile, std::string(opdsUsername));
   serialization::writeString(outputFile, std::string(opdsPassword));
   serialization::writePod(outputFile, sleepScreenCoverFilter);
+  serialization::writePod(outputFile, uiTheme);
+  serialization::writePod(outputFile, frontButtonBack);
+  serialization::writePod(outputFile, frontButtonConfirm);
+  serialization::writePod(outputFile, frontButtonLeft);
+  serialization::writePod(outputFile, frontButtonRight);
+  serialization::writePod(outputFile, fadingFix);
+  serialization::writePod(outputFile, embeddedStyle);
+  serialization::writeString(outputFile, std::string(opdsNewsPath));
   serialization::writePod(outputFile, autoNewsSyncOnBoot);
   // New fields added at end for backward compatibility
   outputFile.close();
@@ -88,6 +146,9 @@ bool CrossPointSettings::loadFromFile() {
 
   // load settings that exist (support older files with fewer fields)
   uint8_t settingsRead = 0;
+  // Track whether remap fields were present in the settings file.
+  bool frontButtonMappingRead = false;
+  const bool isLegacyNewsLayout = fileSettingsCount == 25;
   do {
     readAndValidate(inputFile, sleepScreen, SLEEP_SCREEN_MODE_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
@@ -99,7 +160,7 @@ bool CrossPointSettings::loadFromFile() {
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, orientation, ORIENTATION_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, frontButtonLayout, FRONT_BUTTON_LAYOUT_COUNT);
+    readAndValidate(inputFile, frontButtonLayout, FRONT_BUTTON_LAYOUT_COUNT);  // legacy
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, sideButtonLayout, SIDE_BUTTON_LAYOUT_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
@@ -126,13 +187,44 @@ bool CrossPointSettings::loadFromFile() {
       opdsServerUrl[sizeof(opdsServerUrl) - 1] = '\0';
     }
     if (++settingsRead >= fileSettingsCount) break;
-    {
-      std::string urlStr;
-      serialization::readString(inputFile, urlStr);
-      strncpy(opdsNewsPath, urlStr.c_str(), sizeof(opdsNewsPath) - 1);
-      opdsNewsPath[sizeof(opdsNewsPath) - 1] = '\0';
+    if (isLegacyNewsLayout) {
+      // Legacy feature/news-sync layout before upstream settings expansion.
+      {
+        std::string pathStr;
+        serialization::readString(inputFile, pathStr);
+        strncpy(opdsNewsPath, pathStr.c_str(), sizeof(opdsNewsPath) - 1);
+        opdsNewsPath[sizeof(opdsNewsPath) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, textAntiAliasing);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, hideBatteryPercentage, HIDE_BATTERY_PERCENTAGE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, longPressChapterSkip);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, hyphenationEnabled);
+      if (++settingsRead >= fileSettingsCount) break;
+      {
+        std::string usernameStr;
+        serialization::readString(inputFile, usernameStr);
+        strncpy(opdsUsername, usernameStr.c_str(), sizeof(opdsUsername) - 1);
+        opdsUsername[sizeof(opdsUsername) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      {
+        std::string passwordStr;
+        serialization::readString(inputFile, passwordStr);
+        strncpy(opdsPassword, passwordStr.c_str(), sizeof(opdsPassword) - 1);
+        opdsPassword[sizeof(opdsPassword) - 1] = '\0';
+      }
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, sleepScreenCoverFilter, SLEEP_SCREEN_COVER_FILTER_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      serialization::readPod(inputFile, autoNewsSyncOnBoot);
+      if (++settingsRead >= fileSettingsCount) break;
+      break;
     }
-    if (++settingsRead >= fileSettingsCount) break;
+
     serialization::readPod(inputFile, textAntiAliasing);
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, hideBatteryPercentage, HIDE_BATTERY_PERCENTAGE_COUNT);
@@ -157,10 +249,38 @@ bool CrossPointSettings::loadFromFile() {
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, sleepScreenCoverFilter, SLEEP_SCREEN_COVER_FILTER_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPod(inputFile, uiTheme);
+    if (++settingsRead >= fileSettingsCount) break;
+    readAndValidate(inputFile, frontButtonBack, FRONT_BUTTON_HARDWARE_COUNT);
+    if (++settingsRead >= fileSettingsCount) break;
+    readAndValidate(inputFile, frontButtonConfirm, FRONT_BUTTON_HARDWARE_COUNT);
+    if (++settingsRead >= fileSettingsCount) break;
+    readAndValidate(inputFile, frontButtonLeft, FRONT_BUTTON_HARDWARE_COUNT);
+    if (++settingsRead >= fileSettingsCount) break;
+    readAndValidate(inputFile, frontButtonRight, FRONT_BUTTON_HARDWARE_COUNT);
+    frontButtonMappingRead = true;
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPod(inputFile, fadingFix);
+    if (++settingsRead >= fileSettingsCount) break;
+    serialization::readPod(inputFile, embeddedStyle);
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string pathStr;
+      serialization::readString(inputFile, pathStr);
+      strncpy(opdsNewsPath, pathStr.c_str(), sizeof(opdsNewsPath) - 1);
+      opdsNewsPath[sizeof(opdsNewsPath) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, autoNewsSyncOnBoot);
     if (++settingsRead >= fileSettingsCount) break;
     // New fields added at end for backward compatibility
   } while (false);
+
+  if (frontButtonMappingRead) {
+    validateFrontButtonMapping(*this);
+  } else {
+    applyLegacyFrontButtonLayout(*this);
+  }
 
   inputFile.close();
   Serial.printf("[%lu] [CPS] Settings loaded from file\n", millis());

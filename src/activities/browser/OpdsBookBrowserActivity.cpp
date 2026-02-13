@@ -9,8 +9,8 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
-#include "ScreenComponents.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/StringUtils.h"
@@ -177,7 +177,7 @@ void OpdsBookBrowserActivity::render() const {
   if (state == BrowserState::CHECK_WIFI) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, statusMessage.c_str());
     const auto labels = mappedInput.mapLabels("« Back", "", "", "");
-    renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
   }
@@ -185,7 +185,7 @@ void OpdsBookBrowserActivity::render() const {
   if (state == BrowserState::LOADING) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, statusMessage.c_str());
     const auto labels = mappedInput.mapLabels("« Back", "", "", "");
-    renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
   }
@@ -194,7 +194,7 @@ void OpdsBookBrowserActivity::render() const {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 20, "Error:");
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 10, errorMessage.c_str());
     const auto labels = mappedInput.mapLabels("« Back", "Retry", "", "");
-    renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
   }
@@ -207,7 +207,7 @@ void OpdsBookBrowserActivity::render() const {
       constexpr int barHeight = 20;
       constexpr int barX = 50;
       const int barY = pageHeight / 2 + 20;
-      ScreenComponents::drawProgressBar(renderer, barX, barY, barWidth, barHeight, downloadProgress, downloadTotal);
+      GUI.drawProgressBar(renderer, Rect{barX, barY, barWidth, barHeight}, downloadProgress, downloadTotal);
     }
     renderer.displayBuffer();
     return;
@@ -220,7 +220,7 @@ void OpdsBookBrowserActivity::render() const {
     confirmLabel = "Download";
   }
   const auto labels = mappedInput.mapLabels("« Back", confirmLabel, "", "");
-  renderer.drawButtonHints(UI_10_FONT_ID, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (entries.empty()) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "No entries found");
