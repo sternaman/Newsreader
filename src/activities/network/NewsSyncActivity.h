@@ -22,6 +22,21 @@ class NewsSyncActivity final : public ActivityWithSubactivity {
         onGoHome(onGoHome),
         autoMode(autoMode) {}
 
+  explicit NewsSyncActivity(
+      GfxRenderer& renderer, MappedInputManager& mappedInput, const std::function<void()>& onGoHome,
+      const std::string& sourceLabel, const std::string& feedPath,
+      const std::function<void(const std::string& path, bool openChapterSelection)>& onOpenDownloadedBook,
+      bool openChapterSelection = true)
+      : ActivityWithSubactivity("NewsSync", renderer, mappedInput),
+        onGoHome(onGoHome),
+        quickSourceMode(true),
+        autoConnectSavedWifiOnly(true),
+        autoExitPending(true),
+        forcedSourceLabel(sourceLabel),
+        forcedFeedPath(feedPath),
+        onOpenDownloadedBook(onOpenDownloadedBook),
+        openDownloadedBookWithChapterSelection(openChapterSelection) {}
+
   void onEnter() override;
   void onExit() override;
   void loop() override;
@@ -43,7 +58,14 @@ class NewsSyncActivity final : public ActivityWithSubactivity {
 
   const std::function<void()> onGoHome;
   bool autoMode = false;
+  bool quickSourceMode = false;
+  bool autoConnectSavedWifiOnly = false;
   bool autoExitPending = false;
+  std::string forcedSourceLabel;
+  std::string forcedFeedPath;
+  std::string lastDownloadedPath;
+  std::function<void(const std::string& path, bool openChapterSelection)> onOpenDownloadedBook = nullptr;
+  bool openDownloadedBookWithChapterSelection = false;
 
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
@@ -51,7 +73,9 @@ class NewsSyncActivity final : public ActivityWithSubactivity {
 
   void checkAndConnectWifi();
   void onWifiSelectionComplete(bool connected);
+  bool tryConnectSavedWifi();
+  bool connectToSavedNetwork(const std::string& ssid, const std::string& password);
   void startSync();
-  void downloadEntry(const OpdsEntry& entry);
+  bool downloadEntry(const OpdsEntry& entry);
   void setError(const std::string& message);
 };

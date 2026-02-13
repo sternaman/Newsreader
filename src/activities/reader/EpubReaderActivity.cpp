@@ -170,6 +170,14 @@ void EpubReaderActivity::loop() {
     return;  // Don't access 'this' after callback
   }
 
+  if (openChapterSelectionPending) {
+    openChapterSelectionPending = false;
+    if (epub && epub->getTocItemsCount() > 0) {
+      onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER);
+      return;
+    }
+  }
+
   // Skip button processing after returning from subactivity
   // This prevents stale button release events from triggering actions
   // We wait until: (1) all relevant buttons are released, AND (2) wasReleased events have been cleared

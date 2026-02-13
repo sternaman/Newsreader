@@ -210,6 +210,7 @@ void enterDeepSleep() {
 void onGoHome();
 void onGoToMyLibraryWithPath(const std::string& path);
 void onGoToRecentBooks();
+void onGoToDownloadedNews(const std::string& path, bool openChapterSelection);
 void onGoToReader(const std::string& initialEpubPath) {
   exitActivity();
   enterNewActivity(
@@ -256,10 +257,23 @@ void onGoToNewsSyncAuto() {
   enterNewActivity(new NewsSyncActivity(renderer, mappedInputManager, onGoHome, true));
 }
 
+void onGoToNewsSourceSync(const std::string& sourceLabel, const std::string& feedPath) {
+  exitActivity();
+  enterNewActivity(new NewsSyncActivity(renderer, mappedInputManager, onGoHome, sourceLabel, feedPath, onGoToDownloadedNews,
+                                        true));
+}
+
+void onGoToDownloadedNews(const std::string& path, const bool openChapterSelection) {
+  exitActivity();
+  enterNewActivity(new ReaderActivity(renderer, mappedInputManager, path, onGoHome, onGoToMyLibraryWithPath,
+                                      openChapterSelection));
+}
+
 void onGoHome() {
   exitActivity();
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser, onGoToNewsSync));
+                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser, onGoToNewsSync,
+                                    onGoToNewsSourceSync));
 }
 
 void setupDisplayAndFonts() {

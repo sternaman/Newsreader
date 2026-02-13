@@ -21,6 +21,7 @@ class XtcReaderActivity final : public ActivityWithSubactivity {
   uint32_t currentPage = 0;
   int pagesUntilFullRefresh = 0;
   bool updateRequired = false;
+  bool openChapterSelectionPending = false;
   const std::function<void()> onGoBack;
   const std::function<void()> onGoHome;
 
@@ -33,9 +34,11 @@ class XtcReaderActivity final : public ActivityWithSubactivity {
 
  public:
   explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Xtc> xtc,
-                             const std::function<void()>& onGoBack, const std::function<void()>& onGoHome)
+                             const std::function<void()>& onGoBack, const std::function<void()>& onGoHome,
+                             bool autoOpenChapterSelection = false)
       : ActivityWithSubactivity("XtcReader", renderer, mappedInput),
         xtc(std::move(xtc)),
+        openChapterSelectionPending(autoOpenChapterSelection),
         onGoBack(onGoBack),
         onGoHome(onGoHome) {}
   void onEnter() override;

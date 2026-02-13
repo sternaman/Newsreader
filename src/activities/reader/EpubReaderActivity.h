@@ -27,6 +27,7 @@ class EpubReaderActivity final : public ActivityWithSubactivity {
   bool pendingSubactivityExit = false;  // Defer subactivity exit to avoid use-after-free
   bool pendingGoHome = false;           // Defer go home to avoid race condition with display task
   bool skipNextButtonCheck = false;     // Skip button processing for one frame after subactivity exit
+  bool openChapterSelectionPending = false;
   const std::function<void()> onGoBack;
   const std::function<void()> onGoHome;
 
@@ -45,9 +46,11 @@ class EpubReaderActivity final : public ActivityWithSubactivity {
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,
-                              const std::function<void()>& onGoBack, const std::function<void()>& onGoHome)
+                              const std::function<void()>& onGoBack, const std::function<void()>& onGoHome,
+                              bool autoOpenChapterSelection = false)
       : ActivityWithSubactivity("EpubReader", renderer, mappedInput),
         epub(std::move(epub)),
+        openChapterSelectionPending(autoOpenChapterSelection),
         onGoBack(onGoBack),
         onGoHome(onGoHome) {}
   void onEnter() override;

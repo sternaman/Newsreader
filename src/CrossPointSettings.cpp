@@ -22,7 +22,7 @@ void readAndValidate(FsFile& file, uint8_t& member, const uint8_t maxValue) {
 namespace {
 constexpr uint8_t SETTINGS_FILE_VERSION = 1;
 // Increment this when adding new persisted settings fields
-constexpr uint8_t SETTINGS_COUNT = 32;
+constexpr uint8_t SETTINGS_COUNT = 36;
 constexpr char SETTINGS_FILE[] = "/.crosspoint/settings.bin";
 
 // Validate front button mapping to ensure each hardware button is unique.
@@ -120,6 +120,10 @@ bool CrossPointSettings::saveToFile() const {
   serialization::writePod(outputFile, embeddedStyle);
   serialization::writeString(outputFile, std::string(opdsNewsPath));
   serialization::writePod(outputFile, autoNewsSyncOnBoot);
+  serialization::writeString(outputFile, std::string(opdsNewsBloombergPath));
+  serialization::writeString(outputFile, std::string(opdsNewsBusinessweekPath));
+  serialization::writeString(outputFile, std::string(opdsNewsWsjPath));
+  serialization::writeString(outputFile, std::string(opdsNewsNytPath));
   // New fields added at end for backward compatibility
   outputFile.close();
 
@@ -272,6 +276,34 @@ bool CrossPointSettings::loadFromFile() {
     }
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, autoNewsSyncOnBoot);
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string pathStr;
+      serialization::readString(inputFile, pathStr);
+      strncpy(opdsNewsBloombergPath, pathStr.c_str(), sizeof(opdsNewsBloombergPath) - 1);
+      opdsNewsBloombergPath[sizeof(opdsNewsBloombergPath) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string pathStr;
+      serialization::readString(inputFile, pathStr);
+      strncpy(opdsNewsBusinessweekPath, pathStr.c_str(), sizeof(opdsNewsBusinessweekPath) - 1);
+      opdsNewsBusinessweekPath[sizeof(opdsNewsBusinessweekPath) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string pathStr;
+      serialization::readString(inputFile, pathStr);
+      strncpy(opdsNewsWsjPath, pathStr.c_str(), sizeof(opdsNewsWsjPath) - 1);
+      opdsNewsWsjPath[sizeof(opdsNewsWsjPath) - 1] = '\0';
+    }
+    if (++settingsRead >= fileSettingsCount) break;
+    {
+      std::string pathStr;
+      serialization::readString(inputFile, pathStr);
+      strncpy(opdsNewsNytPath, pathStr.c_str(), sizeof(opdsNewsNytPath) - 1);
+      opdsNewsNytPath[sizeof(opdsNewsNytPath) - 1] = '\0';
+    }
     if (++settingsRead >= fileSettingsCount) break;
     // New fields added at end for backward compatibility
   } while (false);

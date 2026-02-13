@@ -162,6 +162,11 @@ class CrossPointSettings {
   char opdsServerUrl[128] = "";
   // OPDS news feed path (relative or absolute path for quick sync)
   char opdsNewsPath[128] = "";
+  // Per-source OPDS news feed paths for one-tap sync tiles.
+  char opdsNewsBloombergPath[128] = "Bloomberg";
+  char opdsNewsBusinessweekPath[128] = "Businessweek";
+  char opdsNewsWsjPath[128] = "WSJ";
+  char opdsNewsNytPath[128] = "NYT";
   char opdsUsername[64] = "";
   char opdsPassword[64] = "";
   // Hide battery percentage

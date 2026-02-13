@@ -4,6 +4,7 @@
 #include <freertos/task.h>
 
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "../Activity.h"
@@ -13,6 +14,11 @@ struct RecentBook;
 struct Rect;
 
 class HomeActivity final : public Activity {
+  struct NewsSourceTile {
+    std::string label;
+    std::string feedPath;
+  };
+
   TaskHandle_t displayTaskHandle = nullptr;
   SemaphoreHandle_t renderingMutex = nullptr;
   int selectorIndex = 0;
@@ -22,6 +28,7 @@ class HomeActivity final : public Activity {
   bool firstRenderDone = false;
   bool hasOpdsUrl = false;
   bool hasNewsSync = false;
+  std::vector<NewsSourceTile> newsSourceTiles;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
@@ -33,6 +40,7 @@ class HomeActivity final : public Activity {
   const std::function<void()> onFileTransferOpen;
   const std::function<void()> onOpdsBrowserOpen;
   const std::function<void()> onNewsSyncOpen;
+  const std::function<void(const std::string& sourceLabel, const std::string& feedPath)> onNewsSourceSyncOpen;
 
   static void taskTrampoline(void* param);
   [[noreturn]] void displayTaskLoop();
@@ -50,7 +58,9 @@ class HomeActivity final : public Activity {
                         const std::function<void()>& onMyLibraryOpen, const std::function<void()>& onRecentsOpen,
                         const std::function<void()>& onSettingsOpen, const std::function<void()>& onFileTransferOpen,
                         const std::function<void()>& onOpdsBrowserOpen,
-                        const std::function<void()>& onNewsSyncOpen)
+                        const std::function<void()>& onNewsSyncOpen,
+                        const std::function<void(const std::string& sourceLabel, const std::string& feedPath)>&
+                            onNewsSourceSyncOpen)
       : Activity("Home", renderer, mappedInput),
         onSelectBook(onSelectBook),
         onMyLibraryOpen(onMyLibraryOpen),
@@ -58,7 +68,8 @@ class HomeActivity final : public Activity {
         onSettingsOpen(onSettingsOpen),
         onFileTransferOpen(onFileTransferOpen),
         onOpdsBrowserOpen(onOpdsBrowserOpen),
-        onNewsSyncOpen(onNewsSyncOpen) {}
+        onNewsSyncOpen(onNewsSyncOpen),
+        onNewsSourceSyncOpen(onNewsSourceSyncOpen) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

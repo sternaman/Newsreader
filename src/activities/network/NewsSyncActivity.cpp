@@ -13,6 +13,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "WifiCredentialStore.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -22,6 +23,8 @@
 
 namespace {
 constexpr const char* kNewsDir = "/News";
+constexpr unsigned long kWifiConnectTimeoutMs = 12000;
+constexpr unsigned long kWifiPollIntervalMs = 200;
 
 std::string trimWhitespace(const std::string& input) {
   size_t start = 0;
@@ -123,6 +126,7 @@ void NewsSyncActivity::onEnter() {
   downloadProgress = 0;
   downloadTotal = 0;
   entries.clear();
+  lastDownloadedPath.clear();
   selectorIndex = 0;
   updateRequired = true;
 
@@ -161,6 +165,18 @@ void NewsSyncActivity::checkAndConnectWifi() {
     return;
   }
 
+  if (autoConnectSavedWifiOnly) {
+    state = SyncState::CHECK_WIFI;
+    statusMessage = "Connecting WiFi...";
+    updateRequired = true;
+    if (tryConnectSavedWifi()) {
+      startSync();
+    } else {
+      setError("No saved WiFi connection");
+    }
+    return;
+  }
+
   // Not connected - launch WiFi selection screen
   state = SyncState::WIFI_SELECTION;
   updateRequired = true;
@@ -178,6 +194,67 @@ void NewsSyncActivity::onWifiSelectionComplete(const bool connected) {
   }
 }
 
+bool NewsSyncActivity::tryConnectSavedWifi() {
+  WIFI_STORE.loadFromFile();
+  const auto& credentials = WIFI_STORE.getCredentials();
+
+  if (!credentials.empty()) {
+    for (const auto& cred : credentials) {
+      if (cred.ssid.empty()) {
+        continue;
+      }
+      statusMessage = "Connecting: " + cred.ssid;
+      updateRequired = true;
+      if (connectToSavedNetwork(cred.ssid, cred.password)) {
+        Serial.printf("[%lu] [NEWS] Connected to saved WiFi: %s\n", millis(), cred.ssid.c_str());
+        return true;
+      }
+    }
+  }
+
+  // Fallback: try last credentials remembered by the WiFi stack/NVS.
+  statusMessage = "Connecting: last network";
+  updateRequired = true;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin();
+  const unsigned long start = millis();
+  while (millis() - start < kWifiConnectTimeoutMs) {
+    if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+      Serial.printf("[%lu] [NEWS] Connected via remembered WiFi credentials\n", millis());
+      return true;
+    }
+    delay(kWifiPollIntervalMs);
+  }
+
+  WiFi.disconnect();
+  delay(50);
+  return false;
+}
+
+bool NewsSyncActivity::connectToSavedNetwork(const std::string& ssid, const std::string& password) {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  if (password.empty()) {
+    WiFi.begin(ssid.c_str());
+  } else {
+    WiFi.begin(ssid.c_str(), password.c_str());
+  }
+
+  const unsigned long start = millis();
+  while (millis() - start < kWifiConnectTimeoutMs) {
+    if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+      return true;
+    }
+    delay(kWifiPollIntervalMs);
+  }
+
+  WiFi.disconnect();
+  delay(50);
+  return false;
+}
+
 void NewsSyncActivity::startSync() {
   const char* serverUrl = SETTINGS.opdsServerUrl;
   if (strlen(serverUrl) == 0) {
@@ -185,8 +262,9 @@ void NewsSyncActivity::startSync() {
     return;
   }
 
-  const char* feedPath = SETTINGS.opdsNewsPath;
-  if (strlen(feedPath) == 0) {
+  const std::string defaultFeedPath = SETTINGS.opdsNewsPath;
+  const std::string sourceFeedPath = forcedFeedPath.empty() ? SETTINGS.opdsNewsPath : forcedFeedPath;
+  if (sourceFeedPath.empty()) {
     setError("News Feed Path not set");
     return;
   }
@@ -195,47 +273,104 @@ void NewsSyncActivity::startSync() {
   statusMessage = "Fetching feed...";
   updateRequired = true;
 
-  const std::string feedUrl = resolveFeedUrl(serverUrl, feedPath);
-  if (feedUrl.empty()) {
-    setError("Invalid news feed path");
-    return;
-  }
-  Serial.printf("[%lu] [NEWS] Fetching: %s\n", millis(), feedUrl.c_str());
+  const auto fetchBooksFromPath = [serverUrl](const std::string& feedPath,
+                                              std::vector<OpdsEntry>& outBooks) -> bool {
+    const std::string feedUrl = resolveFeedUrl(serverUrl, feedPath);
+    if (feedUrl.empty()) {
+      return false;
+    }
+    Serial.printf("[%lu] [NEWS] Fetching: %s\n", millis(), feedUrl.c_str());
 
-  OpdsParser parser;
-  if (!fetchOpdsFeed(feedUrl, parser)) {
+    OpdsParser parser;
+    if (!fetchOpdsFeed(feedUrl, parser)) {
+      return false;
+    }
+
+    outBooks = parser.getBooks();
+    if (outBooks.empty()) {
+      std::vector<OpdsEntry> navEntries;
+      for (const auto& entry : parser.getEntries()) {
+        if (entry.type == OpdsEntryType::NAVIGATION) {
+          navEntries.push_back(entry);
+        }
+      }
+      if (navEntries.empty()) {
+        return true;
+      }
+      outBooks = resolveNavigationBooks(serverUrl, navEntries);
+    }
+    return true;
+  };
+
+  std::string activeFeedPath = sourceFeedPath;
+  if (quickSourceMode) {
+    const bool sourcePathLooksLikeUrlOrPath = sourceFeedPath.find('/') != std::string::npos ||
+                                              sourceFeedPath.find("opds") != std::string::npos ||
+                                              sourceFeedPath.find('?') != std::string::npos;
+    if (!sourcePathLooksLikeUrlOrPath && !defaultFeedPath.empty()) {
+      // For source labels like "Bloomberg", use the shared news feed and select by title.
+      activeFeedPath = defaultFeedPath;
+    }
+  }
+
+  std::vector<OpdsEntry> books;
+  if (!fetchBooksFromPath(activeFeedPath, books)) {
     setError("Failed to fetch feed");
     return;
   }
-
-  auto books = parser.getBooks();
   if (books.empty()) {
-    std::vector<OpdsEntry> navEntries;
-    for (const auto& entry : parser.getEntries()) {
-      if (entry.type == OpdsEntryType::NAVIGATION) {
-        navEntries.push_back(entry);
+    setError("No books in feed");
+    return;
+  }
+
+  if (quickSourceMode) {
+    const std::string target = toLowerCopy(!forcedSourceLabel.empty() ? forcedSourceLabel : forcedFeedPath);
+    bool sourceMatched = target.empty();
+    if (!target.empty()) {
+      const auto it = std::find_if(books.begin(), books.end(), [&target](const OpdsEntry& entry) {
+        const std::string title = toLowerCopy(entry.title);
+        const std::string author = toLowerCopy(entry.author);
+        return title.find(target) != std::string::npos || author.find(target) != std::string::npos;
+      });
+      if (it != books.end()) {
+        books = {*it};
+        sourceMatched = true;
+      } else if (activeFeedPath != sourceFeedPath) {
+        // Fallback: source path may actually be an explicit feed URL/path.
+        std::vector<OpdsEntry> sourceBooks;
+        if (fetchBooksFromPath(sourceFeedPath, sourceBooks) && !sourceBooks.empty()) {
+          books = {sourceBooks.front()};
+          sourceMatched = true;
+        }
       }
     }
-    if (navEntries.empty()) {
-      setError("No entries in feed");
-      return;
-    }
-
-    books = resolveNavigationBooks(serverUrl, navEntries);
-    if (books.empty()) {
-      setError("No books in feed");
+    if (!sourceMatched) {
+      setError("Source not found in feed");
       return;
     }
   }
 
   entries = std::move(books);
   selectorIndex = 0;
-  if (autoMode) {
+  if (quickSourceMode) {
+    if (entries.empty()) {
+      setError("No books in feed");
+      return;
+    }
+    statusMessage = forcedSourceLabel.empty() ? "Syncing source..." : "Syncing " + forcedSourceLabel + "...";
+    updateRequired = true;
+    const bool success = downloadEntry(entries.front());
+    if (success) {
+      state = SyncState::COMPLETE;
+      statusMessage = "Sync complete";
+      updateRequired = true;
+    }
+    autoExitPending = true;
+  } else if (autoMode) {
     statusMessage = "Auto syncing...";
     updateRequired = true;
     for (const auto& entry : entries) {
-      downloadEntry(entry);
-      if (state == SyncState::ERROR) {
+      if (!downloadEntry(entry)) {
         break;
       }
     }
@@ -252,17 +387,17 @@ void NewsSyncActivity::startSync() {
   }
 }
 
-void NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
+bool NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
   const char* serverUrl = SETTINGS.opdsServerUrl;
   if (strlen(serverUrl) == 0) {
     setError("Calibre Web URL not set");
-    return;
+    return false;
   }
 
   const std::string downloadHref = !entry.hrefXtc.empty() ? entry.hrefXtc : entry.href;
   if (downloadHref.empty()) {
     setError("No download link");
-    return;
+    return false;
   }
   // Use a stable filename per source so daily bundles overwrite cleanly.
   std::string baseName = entry.title;
@@ -312,11 +447,14 @@ void NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
       Epub epub(destPath, "/.crosspoint");
       epub.clearCache();
     }
+    lastDownloadedPath = destPath;
     state = SyncState::COMPLETE;
     statusMessage = "Download complete";
     updateRequired = true;
+    return true;
   } else {
     setError("Download failed");
+    return false;
   }
 }
 
@@ -332,9 +470,20 @@ void NewsSyncActivity::loop() {
     return;
   }
 
-  if (autoMode && autoExitPending && (state == SyncState::COMPLETE || state == SyncState::ERROR)) {
-    onGoHome();
-    return;
+  if (autoExitPending && (state == SyncState::COMPLETE || state == SyncState::ERROR)) {
+    autoExitPending = false;
+    if (quickSourceMode) {
+      if (state == SyncState::COMPLETE && onOpenDownloadedBook && !lastDownloadedPath.empty()) {
+        onOpenDownloadedBook(lastDownloadedPath, openDownloadedBookWithChapterSelection);
+      } else {
+        onGoHome();
+      }
+      return;
+    }
+    if (autoMode) {
+      onGoHome();
+      return;
+    }
   }
 
   if (state == SyncState::CHECK_WIFI) {
@@ -345,6 +494,9 @@ void NewsSyncActivity::loop() {
   }
 
   if (state == SyncState::ERROR || state == SyncState::COMPLETE) {
+    if (quickSourceMode) {
+      return;
+    }
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       onGoHome();
     } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {

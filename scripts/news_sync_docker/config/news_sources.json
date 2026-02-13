@@ -37,17 +37,6 @@
         "res=mediumThreeByTwo440",
         "emit_chapter_markers=false"
       ]
-    },
-    {
-      "type": "recipe",
-      "title": "ExecSum",
-      "recipe": "/app/recipes/substack_x4.recipe",
-      "recipe_options": [
-        "auths=@execsum",
-        "days=365",
-        "res=600",
-        "emit_chapter_markers=false"
-      ]
     }
   ]
 }

@@ -11,8 +11,9 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int MENU_ITEMS = 4;
-const char* menuNames[MENU_ITEMS] = {"OPDS Server URL", "News Feed Path", "Username", "Password"};
+constexpr int MENU_ITEMS = 8;
+const char* menuNames[MENU_ITEMS] = {"OPDS Server URL", "News Feed Path", "Bloomberg Path", "Businessweek Path",
+                                     "WSJ Path", "NYT Path", "Username", "Password"};
 }  // namespace
 
 void CalibreSettingsActivity::taskTrampoline(void* param) {
@@ -114,6 +115,78 @@ void CalibreSettingsActivity::handleSelection() {
           updateRequired = true;
         }));
   } else if (selectedIndex == 2) {
+    // Bloomberg feed path
+    exitActivity();
+    enterNewActivity(new KeyboardEntryActivity(
+        renderer, mappedInput, "Bloomberg Path", SETTINGS.opdsNewsBloombergPath, 10,
+        127,    // maxLength
+        false,  // not password
+        [this](const std::string& path) {
+          strncpy(SETTINGS.opdsNewsBloombergPath, path.c_str(), sizeof(SETTINGS.opdsNewsBloombergPath) - 1);
+          SETTINGS.opdsNewsBloombergPath[sizeof(SETTINGS.opdsNewsBloombergPath) - 1] = '\0';
+          SETTINGS.saveToFile();
+          exitActivity();
+          updateRequired = true;
+        },
+        [this]() {
+          exitActivity();
+          updateRequired = true;
+        }));
+  } else if (selectedIndex == 3) {
+    // Businessweek feed path
+    exitActivity();
+    enterNewActivity(new KeyboardEntryActivity(
+        renderer, mappedInput, "Businessweek Path", SETTINGS.opdsNewsBusinessweekPath, 10,
+        127,    // maxLength
+        false,  // not password
+        [this](const std::string& path) {
+          strncpy(SETTINGS.opdsNewsBusinessweekPath, path.c_str(), sizeof(SETTINGS.opdsNewsBusinessweekPath) - 1);
+          SETTINGS.opdsNewsBusinessweekPath[sizeof(SETTINGS.opdsNewsBusinessweekPath) - 1] = '\0';
+          SETTINGS.saveToFile();
+          exitActivity();
+          updateRequired = true;
+        },
+        [this]() {
+          exitActivity();
+          updateRequired = true;
+        }));
+  } else if (selectedIndex == 4) {
+    // WSJ feed path
+    exitActivity();
+    enterNewActivity(new KeyboardEntryActivity(
+        renderer, mappedInput, "WSJ Path", SETTINGS.opdsNewsWsjPath, 10,
+        127,    // maxLength
+        false,  // not password
+        [this](const std::string& path) {
+          strncpy(SETTINGS.opdsNewsWsjPath, path.c_str(), sizeof(SETTINGS.opdsNewsWsjPath) - 1);
+          SETTINGS.opdsNewsWsjPath[sizeof(SETTINGS.opdsNewsWsjPath) - 1] = '\0';
+          SETTINGS.saveToFile();
+          exitActivity();
+          updateRequired = true;
+        },
+        [this]() {
+          exitActivity();
+          updateRequired = true;
+        }));
+  } else if (selectedIndex == 5) {
+    // NYT feed path
+    exitActivity();
+    enterNewActivity(new KeyboardEntryActivity(
+        renderer, mappedInput, "NYT Path", SETTINGS.opdsNewsNytPath, 10,
+        127,    // maxLength
+        false,  // not password
+        [this](const std::string& path) {
+          strncpy(SETTINGS.opdsNewsNytPath, path.c_str(), sizeof(SETTINGS.opdsNewsNytPath) - 1);
+          SETTINGS.opdsNewsNytPath[sizeof(SETTINGS.opdsNewsNytPath) - 1] = '\0';
+          SETTINGS.saveToFile();
+          exitActivity();
+          updateRequired = true;
+        },
+        [this]() {
+          exitActivity();
+          updateRequired = true;
+        }));
+  } else if (selectedIndex == 6) {
     // Username
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
@@ -131,7 +204,7 @@ void CalibreSettingsActivity::handleSelection() {
           exitActivity();
           updateRequired = true;
         }));
-  } else if (selectedIndex == 3) {
+  } else if (selectedIndex == 7) {
     // Password
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
@@ -194,8 +267,16 @@ void CalibreSettingsActivity::render() {
     } else if (i == 1) {
       status = (strlen(SETTINGS.opdsNewsPath) > 0) ? "[Set]" : "[Not Set]";
     } else if (i == 2) {
-      status = (strlen(SETTINGS.opdsUsername) > 0) ? "[Set]" : "[Not Set]";
+      status = (strlen(SETTINGS.opdsNewsBloombergPath) > 0) ? "[Set]" : "[Not Set]";
     } else if (i == 3) {
+      status = (strlen(SETTINGS.opdsNewsBusinessweekPath) > 0) ? "[Set]" : "[Not Set]";
+    } else if (i == 4) {
+      status = (strlen(SETTINGS.opdsNewsWsjPath) > 0) ? "[Set]" : "[Not Set]";
+    } else if (i == 5) {
+      status = (strlen(SETTINGS.opdsNewsNytPath) > 0) ? "[Set]" : "[Not Set]";
+    } else if (i == 6) {
+      status = (strlen(SETTINGS.opdsUsername) > 0) ? "[Set]" : "[Not Set]";
+    } else if (i == 7) {
       status = (strlen(SETTINGS.opdsPassword) > 0) ? "[Set]" : "[Not Set]";
     }
     const auto width = renderer.getTextWidth(UI_10_FONT_ID, status);

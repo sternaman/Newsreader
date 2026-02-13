@@ -81,16 +81,18 @@ void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
   exitActivity();
-  enterNewActivity(new EpubReaderActivity(
-      renderer, mappedInput, std::move(epub), [this, epubPath] { goToLibrary(epubPath); }, [this] { onGoBack(); }));
+  enterNewActivity(
+      new EpubReaderActivity(renderer, mappedInput, std::move(epub), [this, epubPath] { goToLibrary(epubPath); },
+                             [this] { onGoBack(); }, autoOpenChapterSelection));
 }
 
 void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
   const auto xtcPath = xtc->getPath();
   currentBookPath = xtcPath;
   exitActivity();
-  enterNewActivity(new XtcReaderActivity(
-      renderer, mappedInput, std::move(xtc), [this, xtcPath] { goToLibrary(xtcPath); }, [this] { onGoBack(); }));
+  enterNewActivity(
+      new XtcReaderActivity(renderer, mappedInput, std::move(xtc), [this, xtcPath] { goToLibrary(xtcPath); },
+                            [this] { onGoBack(); }, autoOpenChapterSelection));
 }
 
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {

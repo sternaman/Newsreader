@@ -26,12 +26,6 @@
       "title": "NYTimes",
       "recipe": "../recipes/nytimes_x4.recipe",
       "recipe_options": ["cookie_file=secrets/nyt_cookies.txt"]
-    },
-    {
-      "type": "recipe",
-      "title": "ExecSum",
-      "recipe": "../recipes/substack_x4.recipe",
-      "recipe_options": ["auths=@execsum", "days=365"]
     }
   ]
 }

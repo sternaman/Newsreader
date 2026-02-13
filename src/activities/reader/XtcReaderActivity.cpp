@@ -82,8 +82,7 @@ void XtcReaderActivity::loop() {
     return;
   }
 
-  // Enter chapter selection activity
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  const auto openChapterSelection = [this]() {
     if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {
       xSemaphoreTake(renderingMutex, portMAX_DELAY);
       exitActivity();
@@ -100,6 +99,17 @@ void XtcReaderActivity::loop() {
           }));
       xSemaphoreGive(renderingMutex);
     }
+  };
+
+  if (openChapterSelectionPending) {
+    openChapterSelectionPending = false;
+    openChapterSelection();
+    return;
+  }
+
+  // Enter chapter selection activity
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    openChapterSelection();
   }
 
   // Long press BACK (1s+) goes directly to home
