@@ -1,6 +1,7 @@
-﻿#include "CalibreSettingsActivity.h"
+#include "CalibreSettingsActivity.h"
 
 #include <GfxRenderer.h>
+#include <I18n.h>
 
 #include <cstring>
 
@@ -12,41 +13,18 @@
 
 namespace {
 constexpr int MENU_ITEMS = 8;
-const char* menuNames[MENU_ITEMS] = {"OPDS Server URL", "News Feed Path", "Bloomberg Path", "Businessweek Path",
+const char* menuNames[MENU_ITEMS] = {"Calibre Web URL", "News Feed Path", "Bloomberg Path", "Businessweek Path",
                                      "WSJ Path", "NYT Path", "Username", "Password"};
 }  // namespace
-
-void CalibreSettingsActivity::taskTrampoline(void* param) {
-  auto* self = static_cast<CalibreSettingsActivity*>(param);
-  self->displayTaskLoop();
-}
 
 void CalibreSettingsActivity::onEnter() {
   ActivityWithSubactivity::onEnter();
 
-  renderingMutex = xSemaphoreCreateMutex();
   selectedIndex = 0;
-  updateRequired = true;
-
-  xTaskCreate(&CalibreSettingsActivity::taskTrampoline, "CalibreSettingsTask",
-              4096,               // Stack size
-              this,               // Parameters
-              1,                  // Priority
-              &displayTaskHandle  // Task handle
-  );
+  requestUpdate();
 }
 
-void CalibreSettingsActivity::onExit() {
-  ActivityWithSubactivity::onExit();
-
-  xSemaphoreTake(renderingMutex, portMAX_DELAY);
-  if (displayTaskHandle) {
-    vTaskDelete(displayTaskHandle);
-    displayTaskHandle = nullptr;
-  }
-  vSemaphoreDelete(renderingMutex);
-  renderingMutex = nullptr;
-}
+void CalibreSettingsActivity::onExit() { ActivityWithSubactivity::onExit(); }
 
 void CalibreSettingsActivity::loop() {
   if (subActivity) {
@@ -64,25 +42,23 @@ void CalibreSettingsActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
-      mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-    selectedIndex = (selectedIndex + MENU_ITEMS - 1) % MENU_ITEMS;
-    updateRequired = true;
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Down) ||
-             mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+  buttonNavigator.onNext([this] {
     selectedIndex = (selectedIndex + 1) % MENU_ITEMS;
-    updateRequired = true;
-  }
+    requestUpdate();
+  });
+
+  buttonNavigator.onPrevious([this] {
+    selectedIndex = (selectedIndex + MENU_ITEMS - 1) % MENU_ITEMS;
+    requestUpdate();
+  });
 }
 
 void CalibreSettingsActivity::handleSelection() {
-  xSemaphoreTake(renderingMutex, portMAX_DELAY);
-
   if (selectedIndex == 0) {
     // OPDS Server URL
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "OPDS Server URL", SETTINGS.opdsServerUrl, 10,
+        renderer, mappedInput, menuNames[0], SETTINGS.opdsServerUrl,
         127,    // maxLength
         false,  // not password
         [this](const std::string& url) {
@@ -90,17 +66,20 @@ void CalibreSettingsActivity::handleSelection() {
           SETTINGS.opdsServerUrl[sizeof(SETTINGS.opdsServerUrl) - 1] = '\0';
           SETTINGS.saveToFile();
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         },
         [this]() {
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         }));
-  } else if (selectedIndex == 1) {
-    // News Feed Path
+    return;
+  }
+
+  if (selectedIndex == 1) {
+    // Shared news feed path
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "News Feed Path", SETTINGS.opdsNewsPath, 10,
+        renderer, mappedInput, menuNames[1], SETTINGS.opdsNewsPath,
         127,    // maxLength
         false,  // not password
         [this](const std::string& path) {
@@ -108,89 +87,51 @@ void CalibreSettingsActivity::handleSelection() {
           SETTINGS.opdsNewsPath[sizeof(SETTINGS.opdsNewsPath) - 1] = '\0';
           SETTINGS.saveToFile();
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         },
         [this]() {
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         }));
-  } else if (selectedIndex == 2) {
-    // Bloomberg feed path
+    return;
+  }
+
+  if (selectedIndex >= 2 && selectedIndex <= 5) {
+    char* target = nullptr;
+    if (selectedIndex == 2) {
+      target = SETTINGS.opdsNewsBloombergPath;
+    } else if (selectedIndex == 3) {
+      target = SETTINGS.opdsNewsBusinessweekPath;
+    } else if (selectedIndex == 4) {
+      target = SETTINGS.opdsNewsWsjPath;
+    } else {
+      target = SETTINGS.opdsNewsNytPath;
+    }
+
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "Bloomberg Path", SETTINGS.opdsNewsBloombergPath, 10,
+        renderer, mappedInput, menuNames[selectedIndex], target,
         127,    // maxLength
         false,  // not password
-        [this](const std::string& path) {
-          strncpy(SETTINGS.opdsNewsBloombergPath, path.c_str(), sizeof(SETTINGS.opdsNewsBloombergPath) - 1);
-          SETTINGS.opdsNewsBloombergPath[sizeof(SETTINGS.opdsNewsBloombergPath) - 1] = '\0';
+        [this, target](const std::string& path) {
+          strncpy(target, path.c_str(), 127);
+          target[127] = '\0';
           SETTINGS.saveToFile();
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         },
         [this]() {
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         }));
-  } else if (selectedIndex == 3) {
-    // Businessweek feed path
-    exitActivity();
-    enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "Businessweek Path", SETTINGS.opdsNewsBusinessweekPath, 10,
-        127,    // maxLength
-        false,  // not password
-        [this](const std::string& path) {
-          strncpy(SETTINGS.opdsNewsBusinessweekPath, path.c_str(), sizeof(SETTINGS.opdsNewsBusinessweekPath) - 1);
-          SETTINGS.opdsNewsBusinessweekPath[sizeof(SETTINGS.opdsNewsBusinessweekPath) - 1] = '\0';
-          SETTINGS.saveToFile();
-          exitActivity();
-          updateRequired = true;
-        },
-        [this]() {
-          exitActivity();
-          updateRequired = true;
-        }));
-  } else if (selectedIndex == 4) {
-    // WSJ feed path
-    exitActivity();
-    enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "WSJ Path", SETTINGS.opdsNewsWsjPath, 10,
-        127,    // maxLength
-        false,  // not password
-        [this](const std::string& path) {
-          strncpy(SETTINGS.opdsNewsWsjPath, path.c_str(), sizeof(SETTINGS.opdsNewsWsjPath) - 1);
-          SETTINGS.opdsNewsWsjPath[sizeof(SETTINGS.opdsNewsWsjPath) - 1] = '\0';
-          SETTINGS.saveToFile();
-          exitActivity();
-          updateRequired = true;
-        },
-        [this]() {
-          exitActivity();
-          updateRequired = true;
-        }));
-  } else if (selectedIndex == 5) {
-    // NYT feed path
-    exitActivity();
-    enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "NYT Path", SETTINGS.opdsNewsNytPath, 10,
-        127,    // maxLength
-        false,  // not password
-        [this](const std::string& path) {
-          strncpy(SETTINGS.opdsNewsNytPath, path.c_str(), sizeof(SETTINGS.opdsNewsNytPath) - 1);
-          SETTINGS.opdsNewsNytPath[sizeof(SETTINGS.opdsNewsNytPath) - 1] = '\0';
-          SETTINGS.saveToFile();
-          exitActivity();
-          updateRequired = true;
-        },
-        [this]() {
-          exitActivity();
-          updateRequired = true;
-        }));
-  } else if (selectedIndex == 6) {
+    return;
+  }
+
+  if (selectedIndex == 6) {
     // Username
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "Username", SETTINGS.opdsUsername, 10,
+        renderer, mappedInput, menuNames[6], SETTINGS.opdsUsername,
         63,     // maxLength
         false,  // not password
         [this](const std::string& username) {
@@ -198,17 +139,20 @@ void CalibreSettingsActivity::handleSelection() {
           SETTINGS.opdsUsername[sizeof(SETTINGS.opdsUsername) - 1] = '\0';
           SETTINGS.saveToFile();
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         },
         [this]() {
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         }));
-  } else if (selectedIndex == 7) {
+    return;
+  }
+
+  if (selectedIndex == 7) {
     // Password
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, "Password", SETTINGS.opdsPassword, 10,
+        renderer, mappedInput, menuNames[7], SETTINGS.opdsPassword,
         63,    // maxLength
         true,  // password mode
         [this](const std::string& password) {
@@ -216,75 +160,64 @@ void CalibreSettingsActivity::handleSelection() {
           SETTINGS.opdsPassword[sizeof(SETTINGS.opdsPassword) - 1] = '\0';
           SETTINGS.saveToFile();
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         },
         [this]() {
           exitActivity();
-          updateRequired = true;
+          requestUpdate();
         }));
   }
-
-  xSemaphoreGive(renderingMutex);
 }
 
-void CalibreSettingsActivity::displayTaskLoop() {
-  while (true) {
-    if (updateRequired && !subActivity) {
-      updateRequired = false;
-      xSemaphoreTake(renderingMutex, portMAX_DELAY);
-      render();
-      xSemaphoreGive(renderingMutex);
-    }
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-  }
-}
-
-void CalibreSettingsActivity::render() {
+void CalibreSettingsActivity::render(Activity::RenderLock&&) {
   renderer.clearScreen();
 
+  auto metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_OPDS_BROWSER));
+  GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
+                    "Use /opds for Calibre server");
 
-  // Draw header
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, "OPDS Browser", true, EpdFontFamily::BOLD);
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing + metrics.tabBarHeight;
+  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
-  // Draw info text about Calibre
-  renderer.drawCenteredText(UI_10_FONT_ID, 40, "For Calibre, add /opds to your URL");
+  GUI.drawList(
+      renderer, Rect{0, contentTop, pageWidth, contentHeight}, MENU_ITEMS, static_cast<int>(selectedIndex),
+      [](int index) { return std::string(menuNames[index]); }, nullptr, nullptr,
+      [](int index) {
+        if (index == 0) {
+          return (strlen(SETTINGS.opdsServerUrl) > 0) ? std::string(SETTINGS.opdsServerUrl)
+                                                      : std::string(tr(STR_NOT_SET));
+        }
+        if (index == 1) {
+          return (strlen(SETTINGS.opdsNewsPath) > 0) ? std::string(SETTINGS.opdsNewsPath) : std::string(tr(STR_NOT_SET));
+        }
+        if (index == 2) {
+          return (strlen(SETTINGS.opdsNewsBloombergPath) > 0) ? std::string(SETTINGS.opdsNewsBloombergPath)
+                                                               : std::string(tr(STR_NOT_SET));
+        }
+        if (index == 3) {
+          return (strlen(SETTINGS.opdsNewsBusinessweekPath) > 0) ? std::string(SETTINGS.opdsNewsBusinessweekPath)
+                                                                  : std::string(tr(STR_NOT_SET));
+        }
+        if (index == 4) {
+          return (strlen(SETTINGS.opdsNewsWsjPath) > 0) ? std::string(SETTINGS.opdsNewsWsjPath)
+                                                         : std::string(tr(STR_NOT_SET));
+        }
+        if (index == 5) {
+          return (strlen(SETTINGS.opdsNewsNytPath) > 0) ? std::string(SETTINGS.opdsNewsNytPath)
+                                                         : std::string(tr(STR_NOT_SET));
+        }
+        if (index == 6) {
+          return (strlen(SETTINGS.opdsUsername) > 0) ? std::string(SETTINGS.opdsUsername)
+                                                     : std::string(tr(STR_NOT_SET));
+        }
+        return (strlen(SETTINGS.opdsPassword) > 0) ? std::string("******") : std::string(tr(STR_NOT_SET));
+      },
+      true);
 
-  // Draw selection highlight
-  renderer.fillRect(0, 70 + selectedIndex * 30 - 2, pageWidth - 1, 30);
-
-  // Draw menu items
-  for (int i = 0; i < MENU_ITEMS; i++) {
-    const int settingY = 70 + i * 30;
-    const bool isSelected = (i == selectedIndex);
-
-    renderer.drawText(UI_10_FONT_ID, 20, settingY, menuNames[i], !isSelected);
-
-    // Draw status for each setting
-    const char* status = "[Not Set]";
-    if (i == 0) {
-      status = (strlen(SETTINGS.opdsServerUrl) > 0) ? "[Set]" : "[Not Set]";
-    } else if (i == 1) {
-      status = (strlen(SETTINGS.opdsNewsPath) > 0) ? "[Set]" : "[Not Set]";
-    } else if (i == 2) {
-      status = (strlen(SETTINGS.opdsNewsBloombergPath) > 0) ? "[Set]" : "[Not Set]";
-    } else if (i == 3) {
-      status = (strlen(SETTINGS.opdsNewsBusinessweekPath) > 0) ? "[Set]" : "[Not Set]";
-    } else if (i == 4) {
-      status = (strlen(SETTINGS.opdsNewsWsjPath) > 0) ? "[Set]" : "[Not Set]";
-    } else if (i == 5) {
-      status = (strlen(SETTINGS.opdsNewsNytPath) > 0) ? "[Set]" : "[Not Set]";
-    } else if (i == 6) {
-      status = (strlen(SETTINGS.opdsUsername) > 0) ? "[Set]" : "[Not Set]";
-    } else if (i == 7) {
-      status = (strlen(SETTINGS.opdsPassword) > 0) ? "[Set]" : "[Not Set]";
-    }
-    const auto width = renderer.getTextWidth(UI_10_FONT_ID, status);
-    renderer.drawText(UI_10_FONT_ID, pageWidth - 20 - width, settingY, status, !isSelected);
-  }
-
-  // Draw button hints
-  const auto labels = mappedInput.mapLabels("« Back", "Select", "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

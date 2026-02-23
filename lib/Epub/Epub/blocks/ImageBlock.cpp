@@ -1,8 +1,7 @@
 #include "ImageBlock.h"
 
-#include <FsHelpers.h>
 #include <GfxRenderer.h>
-#include <HardwareSerial.h>
+#include <Logging.h>
 #include <SDCardManager.h>
 #include <Serialization.h>
 
@@ -17,14 +16,11 @@
 ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t height)
     : imagePath(imagePath), width(width), height(height) {}
 
-bool ImageBlock::imageExists() const {
-  FsFile file;
-  return SdMan.openFileForRead("IMG", imagePath, file);
-}
+bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
 
-void ImageBlock::layout(GfxRenderer& renderer) {}
+namespace {
 
-static std::string getCachePath(const std::string& imagePath) {
+std::string getCachePath(const std::string& imagePath) {
   // Replace extension with .pxc (pixel cache)
   size_t dotPos = imagePath.rfind('.');
   if (dotPos != std::string::npos) {
@@ -33,10 +29,10 @@ static std::string getCachePath(const std::string& imagePath) {
   return imagePath + ".pxc";
 }
 
-static bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
-                            int expectedHeight) {
+bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
+                     int expectedHeight) {
   FsFile cacheFile;
-  if (!SdMan.openFileForRead("IMG", cachePath, cacheFile)) {
+  if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
     return false;
   }
 
@@ -50,8 +46,8 @@ static bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath,
   int widthDiff = abs(cachedWidth - expectedWidth);
   int heightDiff = abs(cachedHeight - expectedHeight);
   if (widthDiff > 1 || heightDiff > 1) {
-    Serial.printf("[%lu] [IMG] Cache dimension mismatch: %dx%d vs %dx%d\n", millis(), cachedWidth, cachedHeight,
-                  expectedWidth, expectedHeight);
+    LOG_ERR("IMG", "Cache dimension mismatch: %dx%d vs %dx%d", cachedWidth, cachedHeight, expectedWidth,
+            expectedHeight);
     cacheFile.close();
     return false;
   }
@@ -60,20 +56,20 @@ static bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath,
   expectedWidth = cachedWidth;
   expectedHeight = cachedHeight;
 
-  Serial.printf("[%lu] [IMG] Loading from cache: %s (%dx%d)\n", millis(), cachePath.c_str(), cachedWidth, cachedHeight);
+  LOG_DBG("IMG", "Loading from cache: %s (%dx%d)", cachePath.c_str(), cachedWidth, cachedHeight);
 
   // Read and render row by row to minimize memory usage
   const int bytesPerRow = (cachedWidth + 3) / 4;  // 2 bits per pixel, 4 pixels per byte
   uint8_t* rowBuffer = (uint8_t*)malloc(bytesPerRow);
   if (!rowBuffer) {
-    Serial.printf("[%lu] [IMG] Failed to allocate row buffer\n", millis());
+    LOG_ERR("IMG", "Failed to allocate row buffer");
     cacheFile.close();
     return false;
   }
 
   for (int row = 0; row < cachedHeight; row++) {
     if (cacheFile.read(rowBuffer, bytesPerRow) != bytesPerRow) {
-      Serial.printf("[%lu] [IMG] Cache read error at row %d\n", millis(), row);
+      LOG_ERR("IMG", "Cache read error at row %d", row);
       free(rowBuffer);
       cacheFile.close();
       return false;
@@ -91,20 +87,22 @@ static bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath,
 
   free(rowBuffer);
   cacheFile.close();
-  Serial.printf("[%lu] [IMG] Cache render complete\n", millis());
+  LOG_DBG("IMG", "Cache render complete");
   return true;
 }
 
+}  // namespace
+
 void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
-  Serial.printf("[%lu] [IMG] Rendering image at %d,%d: %s (%dx%d)\n", millis(), x, y, imagePath.c_str(), width, height);
+  LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
 
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
 
   // Bounds check render position using logical screen dimensions
   if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
-    Serial.printf("[%lu] [IMG] Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)\n", millis(), x, y, width,
-                  height, screenWidth, screenHeight);
+    LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
+            screenHeight);
     return;
   }
 
@@ -117,19 +115,19 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // No cache - need to decode the image
   // Check if image file exists
   FsFile file;
-  if (!SdMan.openFileForRead("IMG", imagePath, file)) {
-    Serial.printf("[%lu] [IMG] Image file not found: %s\n", millis(), imagePath.c_str());
+  if (!Storage.openFileForRead("IMG", imagePath, file)) {
+    LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
     return;
   }
   size_t fileSize = file.size();
   file.close();
 
   if (fileSize == 0) {
-    Serial.printf("[%lu] [IMG] Image file is empty: %s\n", millis(), imagePath.c_str());
+    LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
     return;
   }
 
-  Serial.printf("[%lu] [IMG] Decoding and caching: %s\n", millis(), imagePath.c_str());
+  LOG_DBG("IMG", "Decoding and caching: %s", imagePath.c_str());
 
   RenderConfig config;
   config.x = x;
@@ -139,23 +137,24 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   config.useGrayscale = true;
   config.useDithering = true;
   config.performanceMode = false;
-  config.cachePath = cachePath;  // Enable caching during decode
+  config.useExactDimensions = true;  // Use pre-calculated dimensions to avoid rounding mismatches
+  config.cachePath = cachePath;      // Enable caching during decode
 
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {
-    Serial.printf("[%lu] [IMG] No decoder found for image: %s\n", millis(), imagePath.c_str());
+    LOG_ERR("IMG", "No decoder found for image: %s", imagePath.c_str());
     return;
   }
 
-  Serial.printf("[%lu] [IMG] Using %s decoder\n", millis(), decoder->getFormatName());
+  LOG_DBG("IMG", "Using %s decoder", decoder->getFormatName());
 
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
-    Serial.printf("[%lu] [IMG] Failed to decode image: %s\n", millis(), imagePath.c_str());
+    LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
     return;
   }
 
-  Serial.printf("[%lu] [IMG] Decode successful\n", millis());
+  LOG_DBG("IMG", "Decode successful");
 }
 
 bool ImageBlock::serialize(FsFile& file) {

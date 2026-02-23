@@ -1,33 +1,17 @@
 #include "ImageDecoderFactory.h"
 
-#include <HardwareSerial.h>
+#include <Logging.h>
 
 #include <memory>
 #include <string>
-#include <vector>
 
 #include "JpegToFramebufferConverter.h"
 #include "PngToFramebufferConverter.h"
 
 std::unique_ptr<JpegToFramebufferConverter> ImageDecoderFactory::jpegDecoder = nullptr;
 std::unique_ptr<PngToFramebufferConverter> ImageDecoderFactory::pngDecoder = nullptr;
-bool ImageDecoderFactory::initialized = false;
-
-void ImageDecoderFactory::initialize() {
-  if (initialized) return;
-
-  jpegDecoder = std::unique_ptr<JpegToFramebufferConverter>(new JpegToFramebufferConverter());
-  pngDecoder = std::unique_ptr<PngToFramebufferConverter>(new PngToFramebufferConverter());
-
-  initialized = true;
-  Serial.printf("[%lu] [DEC] Image decoder factory initialized\n", millis());
-}
 
 ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& imagePath) {
-  if (!initialized) {
-    initialize();
-  }
-
   std::string ext = imagePath;
   size_t dotPos = ext.rfind('.');
   if (dotPos != std::string::npos) {
@@ -39,22 +23,20 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
     ext = "";
   }
 
-  if (jpegDecoder && jpegDecoder->supportsFormat(ext)) {
+  if (JpegToFramebufferConverter::supportsFormat(ext)) {
+    if (!jpegDecoder) {
+      jpegDecoder.reset(new JpegToFramebufferConverter());
+    }
     return jpegDecoder.get();
-  } else if (pngDecoder && pngDecoder->supportsFormat(ext)) {
+  } else if (PngToFramebufferConverter::supportsFormat(ext)) {
+    if (!pngDecoder) {
+      pngDecoder.reset(new PngToFramebufferConverter());
+    }
     return pngDecoder.get();
   }
 
-  Serial.printf("[%lu] [DEC] No decoder found for image: %s\n", millis(), imagePath.c_str());
+  LOG_ERR("DEC", "No decoder found for image: %s", imagePath.c_str());
   return nullptr;
 }
 
 bool ImageDecoderFactory::isFormatSupported(const std::string& imagePath) { return getDecoder(imagePath) != nullptr; }
-
-std::vector<std::string> ImageDecoderFactory::getSupportedFormats() {
-  std::vector<std::string> formats;
-  formats.push_back(".jpg");
-  formats.push_back(".jpeg");
-  formats.push_back(".png");
-  return formats;
-}

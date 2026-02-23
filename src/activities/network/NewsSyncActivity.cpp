@@ -2,10 +2,10 @@
 
 #include <Epub.h>
 #include <GfxRenderer.h>
-#include <HardwareSerial.h>
+#include <HalStorage.h>
+#include <Logging.h>
 #include <OpdsParser.h>
 #include <OpdsStream.h>
-#include <SDCardManager.h>
 #include <Xtc.h>
 #include <WiFi.h>
 #include <algorithm>
@@ -206,7 +206,7 @@ bool NewsSyncActivity::tryConnectSavedWifi() {
       statusMessage = "Connecting: " + cred.ssid;
       updateRequired = true;
       if (connectToSavedNetwork(cred.ssid, cred.password)) {
-        Serial.printf("[%lu] [NEWS] Connected to saved WiFi: %s\n", millis(), cred.ssid.c_str());
+        LOG_INF("NEWS", "Connected to saved WiFi: %s", cred.ssid.c_str());
         return true;
       }
     }
@@ -220,7 +220,7 @@ bool NewsSyncActivity::tryConnectSavedWifi() {
   const unsigned long start = millis();
   while (millis() - start < kWifiConnectTimeoutMs) {
     if (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
-      Serial.printf("[%lu] [NEWS] Connected via remembered WiFi credentials\n", millis());
+      LOG_INF("NEWS", "Connected via remembered WiFi credentials");
       return true;
     }
     delay(kWifiPollIntervalMs);
@@ -279,7 +279,7 @@ void NewsSyncActivity::startSync() {
     if (feedUrl.empty()) {
       return false;
     }
-    Serial.printf("[%lu] [NEWS] Fetching: %s\n", millis(), feedUrl.c_str());
+    LOG_INF("NEWS", "Fetching: %s", feedUrl.c_str());
 
     OpdsParser parser;
     if (!fetchOpdsFeed(feedUrl, parser)) {
@@ -407,7 +407,7 @@ bool NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
   }
 
   // Ensure target directory exists
-  SdMan.mkdir(kNewsDir);
+  Storage.mkdir(kNewsDir);
 
   std::string extension = ".epub";
   if (StringUtils::checkFileExtension(downloadHref, ".xtch")) {
@@ -418,8 +418,8 @@ bool NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
 
   const std::string destPath = std::string(kNewsDir) + "/" + safeName + extension;
   // Overwrite existing bundle so the latest download replaces prior days.
-  if (SdMan.exists(destPath.c_str())) {
-    SdMan.remove(destPath.c_str());
+  if (Storage.exists(destPath.c_str())) {
+    Storage.remove(destPath.c_str());
   }
 
   state = SyncState::DOWNLOADING;
@@ -429,7 +429,7 @@ bool NewsSyncActivity::downloadEntry(const OpdsEntry& entry) {
   updateRequired = true;
 
   const std::string downloadUrl = UrlUtils::buildUrl(serverUrl, downloadHref);
-  Serial.printf("[%lu] [NEWS] Downloading: %s -> %s\n", millis(), downloadUrl.c_str(), destPath.c_str());
+  LOG_INF("NEWS", "Downloading: %s -> %s", downloadUrl.c_str(), destPath.c_str());
 
   const auto result =
       HttpDownloader::downloadToFile(downloadUrl, destPath, [this](const size_t downloaded, const size_t total) {

@@ -1,7 +1,7 @@
 #include "JpegToFramebufferConverter.h"
 
 #include <GfxRenderer.h>
-#include <HardwareSerial.h>
+#include <Logging.h>
 #include <SDCardManager.h>
 #include <SdFat.h>
 #include <picojpeg.h>
@@ -22,8 +22,8 @@ struct JpegContext {
 
 bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
   FsFile file;
-  if (!SdMan.openFileForRead("JPG", imagePath, file)) {
-    Serial.printf("[%lu] [JPG] Failed to open file for dimensions: %s\n", millis(), imagePath.c_str());
+  if (!Storage.openFileForRead("JPG", imagePath, file)) {
+    LOG_ERR("JPG", "Failed to open file for dimensions: %s", imagePath.c_str());
     return false;
   }
 
@@ -34,23 +34,23 @@ bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePat
   file.close();
 
   if (status != 0) {
-    Serial.printf("[%lu] [JPG] Failed to init JPEG for dimensions: %d\n", millis(), status);
+    LOG_ERR("JPG", "Failed to init JPEG for dimensions: %d", status);
     return false;
   }
 
   out.width = imageInfo.m_width;
   out.height = imageInfo.m_height;
-  Serial.printf("[%lu] [JPG] Image dimensions: %dx%d\n", millis(), out.width, out.height);
+  LOG_DBG("JPG", "Image dimensions: %dx%d", out.width, out.height);
   return true;
 }
 
 bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,
                                                      const RenderConfig& config) {
-  Serial.printf("[%lu] [JPG] Decoding JPEG: %s\n", millis(), imagePath.c_str());
+  LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
 
   FsFile file;
-  if (!SdMan.openFileForRead("JPG", imagePath, file)) {
-    Serial.printf("[%lu] [JPG] Failed to open file: %s\n", millis(), imagePath.c_str());
+  if (!Storage.openFileForRead("JPG", imagePath, file)) {
+    LOG_ERR("JPG", "Failed to open file: %s", imagePath.c_str());
     return false;
   }
 
@@ -59,7 +59,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   int status = pjpeg_decode_init(&imageInfo, jpegReadCallback, &context, 0);
   if (status != 0) {
-    Serial.printf("[%lu] [JPG] picojpeg init failed: %d\n", millis(), status);
+    LOG_ERR("JPG", "picojpeg init failed: %d", status);
     file.close();
     return false;
   }
@@ -69,24 +69,35 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     return false;
   }
 
-  // Calculate scale factor to fit within maxWidth/maxHeight
-  float scaleX =
-      (config.maxWidth > 0 && imageInfo.m_width > config.maxWidth) ? (float)config.maxWidth / imageInfo.m_width : 1.0f;
-  float scaleY = (config.maxHeight > 0 && imageInfo.m_height > config.maxHeight)
-                     ? (float)config.maxHeight / imageInfo.m_height
-                     : 1.0f;
-  float scale = (scaleX < scaleY) ? scaleX : scaleY;
-  if (scale > 1.0f) scale = 1.0f;
+  // Calculate output dimensions
+  int destWidth, destHeight;
+  float scale;
 
-  int destWidth = (int)(imageInfo.m_width * scale);
-  int destHeight = (int)(imageInfo.m_height * scale);
+  if (config.useExactDimensions && config.maxWidth > 0 && config.maxHeight > 0) {
+    // Use exact dimensions as specified (avoids rounding mismatches with pre-calculated sizes)
+    destWidth = config.maxWidth;
+    destHeight = config.maxHeight;
+    scale = (float)destWidth / imageInfo.m_width;
+  } else {
+    // Calculate scale factor to fit within maxWidth/maxHeight
+    float scaleX = (config.maxWidth > 0 && imageInfo.m_width > config.maxWidth)
+                       ? (float)config.maxWidth / imageInfo.m_width
+                       : 1.0f;
+    float scaleY = (config.maxHeight > 0 && imageInfo.m_height > config.maxHeight)
+                       ? (float)config.maxHeight / imageInfo.m_height
+                       : 1.0f;
+    scale = (scaleX < scaleY) ? scaleX : scaleY;
+    if (scale > 1.0f) scale = 1.0f;
 
-  Serial.printf("[%lu] [JPG] JPEG %dx%d -> %dx%d (scale %.2f), scan type: %d, MCU: %dx%d\n", millis(),
-                imageInfo.m_width, imageInfo.m_height, destWidth, destHeight, scale, imageInfo.m_scanType,
-                imageInfo.m_MCUWidth, imageInfo.m_MCUHeight);
+    destWidth = (int)(imageInfo.m_width * scale);
+    destHeight = (int)(imageInfo.m_height * scale);
+  }
+
+  LOG_DBG("JPG", "JPEG %dx%d -> %dx%d (scale %.2f), scan type: %d, MCU: %dx%d", imageInfo.m_width, imageInfo.m_height,
+          destWidth, destHeight, scale, imageInfo.m_scanType, imageInfo.m_MCUWidth, imageInfo.m_MCUHeight);
 
   if (!imageInfo.m_pMCUBufR || !imageInfo.m_pMCUBufG || !imageInfo.m_pMCUBufB) {
-    Serial.printf("[%lu] [JPG] Null buffer pointers in imageInfo\n", millis());
+    LOG_ERR("JPG", "Null buffer pointers in imageInfo");
     file.close();
     return false;
   }
@@ -99,7 +110,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   bool caching = !config.cachePath.empty();
   if (caching) {
     if (!cache.allocate(destWidth, destHeight, config.x, config.y)) {
-      Serial.printf("[%lu] [JPG] Failed to allocate cache buffer, continuing without caching\n", millis());
+      LOG_ERR("JPG", "Failed to allocate cache buffer, continuing without caching");
       caching = false;
     }
   }
@@ -113,7 +124,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
       break;
     }
     if (status != 0) {
-      Serial.printf("[%lu] [JPG] MCU decode failed: %d\n", millis(), status);
+      LOG_ERR("JPG", "MCU decode failed: %d", status);
       file.close();
       return false;
     }
@@ -242,7 +253,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     }
   }
 
-  Serial.printf("[%lu] [JPG] Decoding complete\n", millis());
+  LOG_DBG("JPG", "Decoding complete");
   file.close();
 
   // Write cache file if caching was enabled
@@ -277,7 +288,7 @@ unsigned char JpegToFramebufferConverter::jpegReadCallback(unsigned char* pBuf, 
   return 0;
 }
 
-bool JpegToFramebufferConverter::supportsFormat(const std::string& extension) const {
+bool JpegToFramebufferConverter::supportsFormat(const std::string& extension) {
   std::string ext = extension;
   for (auto& c : ext) {
     c = tolower(c);

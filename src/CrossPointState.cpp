@@ -1,7 +1,7 @@
 #include "CrossPointState.h"
 
-#include <HardwareSerial.h>
-#include <SDCardManager.h>
+#include <HalStorage.h>
+#include <Logging.h>
 #include <Serialization.h>
 
 namespace {
@@ -13,7 +13,7 @@ CrossPointState CrossPointState::instance;
 
 bool CrossPointState::saveToFile() const {
   FsFile outputFile;
-  if (!SdMan.openFileForWrite("CPS", STATE_FILE, outputFile)) {
+  if (!Storage.openFileForWrite("CPS", STATE_FILE, outputFile)) {
     return false;
   }
 
@@ -28,14 +28,14 @@ bool CrossPointState::saveToFile() const {
 
 bool CrossPointState::loadFromFile() {
   FsFile inputFile;
-  if (!SdMan.openFileForRead("CPS", STATE_FILE, inputFile)) {
+  if (!Storage.openFileForRead("CPS", STATE_FILE, inputFile)) {
     return false;
   }
 
   uint8_t version;
   serialization::readPod(inputFile, version);
   if (version > STATE_FILE_VERSION) {
-    Serial.printf("[%lu] [CPS] Deserialization failed: Unknown version %u\n", millis(), version);
+    LOG_ERR("CPS", "Deserialization failed: Unknown version %u", version);
     inputFile.close();
     return false;
   }

@@ -5,6 +5,7 @@
 secrets/
 scripts/nytrss_docker/data/*.txt
 lib/EpdFont/fontsrc
+lib/I18n/I18nStrings.cpp
 *.generated.h
 .vs
 build
