@@ -12,9 +12,8 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int MENU_ITEMS = 8;
-const char* menuNames[MENU_ITEMS] = {"Calibre Web URL", "News Feed Path", "Bloomberg Path", "Businessweek Path",
-                                     "WSJ Path", "NYT Path", "Username", "Password"};
+constexpr int MENU_ITEMS = 4;
+const char* menuNames[MENU_ITEMS] = {"Calibre Web URL", "News Feed Path", "Username", "Password"};
 }  // namespace
 
 void CalibreSettingsActivity::onEnter() {
@@ -96,42 +95,11 @@ void CalibreSettingsActivity::handleSelection() {
     return;
   }
 
-  if (selectedIndex >= 2 && selectedIndex <= 5) {
-    char* target = nullptr;
-    if (selectedIndex == 2) {
-      target = SETTINGS.opdsNewsBloombergPath;
-    } else if (selectedIndex == 3) {
-      target = SETTINGS.opdsNewsBusinessweekPath;
-    } else if (selectedIndex == 4) {
-      target = SETTINGS.opdsNewsWsjPath;
-    } else {
-      target = SETTINGS.opdsNewsNytPath;
-    }
-
-    exitActivity();
-    enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, menuNames[selectedIndex], target,
-        127,    // maxLength
-        false,  // not password
-        [this, target](const std::string& path) {
-          strncpy(target, path.c_str(), 127);
-          target[127] = '\0';
-          SETTINGS.saveToFile();
-          exitActivity();
-          requestUpdate();
-        },
-        [this]() {
-          exitActivity();
-          requestUpdate();
-        }));
-    return;
-  }
-
-  if (selectedIndex == 6) {
+  if (selectedIndex == 2) {
     // Username
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, menuNames[6], SETTINGS.opdsUsername,
+        renderer, mappedInput, menuNames[2], SETTINGS.opdsUsername,
         63,     // maxLength
         false,  // not password
         [this](const std::string& username) {
@@ -148,11 +116,11 @@ void CalibreSettingsActivity::handleSelection() {
     return;
   }
 
-  if (selectedIndex == 7) {
+  if (selectedIndex == 3) {
     // Password
     exitActivity();
     enterNewActivity(new KeyboardEntryActivity(
-        renderer, mappedInput, menuNames[7], SETTINGS.opdsPassword,
+        renderer, mappedInput, menuNames[3], SETTINGS.opdsPassword,
         63,    // maxLength
         true,  // password mode
         [this](const std::string& password) {
@@ -191,25 +159,10 @@ void CalibreSettingsActivity::render(Activity::RenderLock&&) {
                                                       : std::string(tr(STR_NOT_SET));
         }
         if (index == 1) {
-          return (strlen(SETTINGS.opdsNewsPath) > 0) ? std::string(SETTINGS.opdsNewsPath) : std::string(tr(STR_NOT_SET));
+          return (strlen(SETTINGS.opdsNewsPath) > 0) ? std::string(SETTINGS.opdsNewsPath)
+                                                      : std::string(tr(STR_NOT_SET));
         }
         if (index == 2) {
-          return (strlen(SETTINGS.opdsNewsBloombergPath) > 0) ? std::string(SETTINGS.opdsNewsBloombergPath)
-                                                               : std::string(tr(STR_NOT_SET));
-        }
-        if (index == 3) {
-          return (strlen(SETTINGS.opdsNewsBusinessweekPath) > 0) ? std::string(SETTINGS.opdsNewsBusinessweekPath)
-                                                                  : std::string(tr(STR_NOT_SET));
-        }
-        if (index == 4) {
-          return (strlen(SETTINGS.opdsNewsWsjPath) > 0) ? std::string(SETTINGS.opdsNewsWsjPath)
-                                                         : std::string(tr(STR_NOT_SET));
-        }
-        if (index == 5) {
-          return (strlen(SETTINGS.opdsNewsNytPath) > 0) ? std::string(SETTINGS.opdsNewsNytPath)
-                                                         : std::string(tr(STR_NOT_SET));
-        }
-        if (index == 6) {
           return (strlen(SETTINGS.opdsUsername) > 0) ? std::string(SETTINGS.opdsUsername)
                                                      : std::string(tr(STR_NOT_SET));
         }

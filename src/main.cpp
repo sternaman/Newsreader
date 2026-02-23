@@ -263,12 +263,6 @@ void onGoToNewsSyncAuto() {
   enterNewActivity(new NewsSyncActivity(renderer, mappedInputManager, onGoHome, true));
 }
 
-void onGoToNewsSourceSync(const std::string& sourceLabel, const std::string& feedPath) {
-  exitActivity();
-  enterNewActivity(new NewsSyncActivity(renderer, mappedInputManager, onGoHome, sourceLabel, feedPath, onGoToDownloadedNews,
-                                        true));
-}
-
 void onGoToDownloadedNews(const std::string& path, const bool openChapterSelection) {
   exitActivity();
   enterNewActivity(new ReaderActivity(renderer, mappedInputManager, path, onGoHome, onGoToMyLibraryWithPath,
@@ -278,8 +272,7 @@ void onGoToDownloadedNews(const std::string& path, const bool openChapterSelecti
 void onGoHome() {
   exitActivity();
   enterNewActivity(new HomeActivity(renderer, mappedInputManager, onGoToReader, onGoToMyLibrary, onGoToRecentBooks,
-                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser, onGoToNewsSync,
-                                    onGoToNewsSourceSync));
+                                    onGoToSettings, onGoToFileTransfer, onGoToBrowser, onGoToNewsSync));
 }
 
 void setupDisplayAndFonts() {

@@ -20,8 +20,8 @@ class Activity {
 
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
-  [[noreturn]] static void renderTaskTrampoline(void* param);
-  [[noreturn]] virtual void renderTaskLoop();
+  static void renderTaskTrampoline(void* param);
+  virtual void renderTaskLoop();
 
   // Mutex to protect rendering operations from being deleted mid-render
   SemaphoreHandle_t renderingMutex = nullptr;
