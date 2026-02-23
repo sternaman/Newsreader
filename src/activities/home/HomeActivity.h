@@ -11,11 +11,6 @@ struct RecentBook;
 struct Rect;
 
 class HomeActivity final : public Activity {
-  struct NewsSourceTile {
-    std::string label;
-    std::string feedPath;
-  };
-
   ButtonNavigator buttonNavigator;
   int selectorIndex = 0;
   bool recentsLoading = false;
@@ -23,7 +18,6 @@ class HomeActivity final : public Activity {
   bool firstRenderDone = false;
   bool hasOpdsUrl = false;
   bool hasNewsSync = false;
-  std::vector<NewsSourceTile> newsSourceTiles;
   bool coverRendered = false;      // Track if cover has been rendered once
   bool coverBufferStored = false;  // Track if cover buffer is stored
   uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image

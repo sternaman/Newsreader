@@ -31,7 +31,6 @@ int HomeActivity::getMenuItemCount() const {
   if (hasNewsSync) {
     count++;
   }
-  count += static_cast<int>(newsSourceTiles.size());
   return count;
 }
 
@@ -119,24 +118,6 @@ void HomeActivity::onEnter() {
   // Check if OPDS browser URL is configured
   hasOpdsUrl = strlen(SETTINGS.opdsServerUrl) > 0;
   hasNewsSync = hasOpdsUrl && strlen(SETTINGS.opdsNewsPath) > 0;
-  newsSourceTiles.clear();
-  if (hasOpdsUrl) {
-    const struct {
-      const char* label;
-      const char* feedPath;
-    } sources[] = {
-        {"Bloomberg", SETTINGS.opdsNewsBloombergPath},
-        {"Businessweek", SETTINGS.opdsNewsBusinessweekPath},
-        {"WSJ", SETTINGS.opdsNewsWsjPath},
-        {"NYT", SETTINGS.opdsNewsNytPath},
-    };
-
-    for (const auto& source : sources) {
-      if (source.feedPath && source.feedPath[0] != '\0') {
-        newsSourceTiles.push_back(NewsSourceTile{source.label, source.feedPath});
-      }
-    }
-  }
 
   selectorIndex = 0;
 
@@ -217,8 +198,6 @@ void HomeActivity::loop() {
     const int recentsIdx = idx++;
     const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
     const int newsSyncIdx = hasNewsSync ? idx++ : -1;
-    const int newsSourceStartIdx = idx;
-    idx += static_cast<int>(newsSourceTiles.size());
     const int fileTransferIdx = idx++;
     const int settingsIdx = idx;
 
@@ -232,10 +211,6 @@ void HomeActivity::loop() {
       onOpdsBrowserOpen();
     } else if (menuSelectedIndex == newsSyncIdx) {
       onNewsSyncOpen();
-    } else if (menuSelectedIndex >= newsSourceStartIdx &&
-               menuSelectedIndex < newsSourceStartIdx + static_cast<int>(newsSourceTiles.size())) {
-      const int sourceIndex = menuSelectedIndex - newsSourceStartIdx;
-      onNewsSourceSyncOpen(newsSourceTiles[sourceIndex].label, newsSourceTiles[sourceIndex].feedPath);
     } else if (menuSelectedIndex == fileTransferIdx) {
       onFileTransferOpen();
     } else if (menuSelectedIndex == settingsIdx) {
@@ -271,16 +246,6 @@ void HomeActivity::render(Activity::RenderLock&&) {
   if (hasNewsSync) {
     const auto insertPos = hasOpdsUrl ? 3 : 2;
     menuItems.insert(menuItems.begin() + insertPos, "News Sync (Browse)");
-  }
-  if (!newsSourceTiles.empty()) {
-    auto insertPos = hasOpdsUrl ? 3 : 2;
-    if (hasNewsSync) {
-      insertPos++;
-    }
-    for (const auto& source : newsSourceTiles) {
-      menuItems.insert(menuItems.begin() + insertPos, source.label.c_str());
-      insertPos++;
-    }
   }
 
   GUI.drawButtonMenu(
