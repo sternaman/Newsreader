@@ -7,14 +7,49 @@ REFRESH_SECONDS="${REFRESH_SECONDS:-86400}"
 SCHEDULE_TIMES="${SCHEDULE_TIMES:-}"
 PORT="${PORT:-8080}"
 LOCK_DIR="${LOCK_DIR:-/tmp/news_sync_lock}"
+LOCK_PID_FILE="${LOCK_DIR}/pid"
+SYNC_TIMEOUT_SECONDS="${SYNC_TIMEOUT_SECONDS:-3300}"
 
 mkdir -p "${OUT_DIR}"
 
+release_lock() {
+  rm -f "${LOCK_PID_FILE}" 2>/dev/null || true
+  rmdir "${LOCK_DIR}" 2>/dev/null || true
+}
+
+clear_stale_lock() {
+  if [[ ! -d "${LOCK_DIR}" ]]; then
+    return 0
+  fi
+
+  local lock_pid=""
+  if [[ -f "${LOCK_PID_FILE}" ]]; then
+    lock_pid="$(cat "${LOCK_PID_FILE}" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null; then
+    return 0
+  fi
+
+  echo "Found stale news sync lock; clearing."
+  rm -rf "${LOCK_DIR}"
+}
+
+run_sync() {
+  if [[ "${SYNC_TIMEOUT_SECONDS}" -gt 0 ]]; then
+    timeout "${SYNC_TIMEOUT_SECONDS}" python3 /app/scripts/news_sync_server.py --config "${CONFIG_PATH}"
+  else
+    python3 /app/scripts/news_sync_server.py --config "${CONFIG_PATH}"
+  fi
+}
+
 build_once() {
+  clear_stale_lock
   if mkdir "${LOCK_DIR}" 2>/dev/null; then
     (
-      trap 'rmdir "${LOCK_DIR}"' EXIT
-      python3 /app/scripts/news_sync_server.py --config "${CONFIG_PATH}"
+      echo "${BASHPID:-$$}" > "${LOCK_PID_FILE}"
+      trap 'release_lock' EXIT INT TERM
+      run_sync
     )
   else
     echo "News sync already running; skipping."
