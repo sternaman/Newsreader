@@ -26,6 +26,12 @@
       "title": "NYTimes",
       "recipe": "../recipes/nytimes_x4.recipe",
       "recipe_options": ["cookie_file=secrets/nyt_cookies.txt"]
+    },
+    {
+      "type": "recipe",
+      "title": "NPR Text",
+      "recipe": "../recipes/npr_text_x4.recipe",
+      "recipe_options": ["max_per_section=20"]
     }
   ]
 }

@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+# vim:fileencoding=utf-8
+
+import re
+from html import unescape
+from urllib.parse import urljoin
+
+from calibre.web.feeds.news import BasicNewsRecipe
+
+
+ARTICLE_PATH_RE = re.compile(r"^/(?:(?:nx-s1|g-s1)-\d+|\d{7,})$")
+
+
+def _safe_int(value, default):
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+class NprTextX4(BasicNewsRecipe):
+    title = u"NPR Text (X4)"
+    language = "en"
+    __author__ = "local"
+    no_stylesheets = True
+    encoding = "utf-8"
+    remove_javascript = True
+    remove_attributes = ["style", "height", "width"]
+    ignore_duplicate_articles = {"url", "title"}
+    # Keep image sizing aligned with the other X4 recipes.
+    scale_news_images = (360, 480)
+
+    keep_only_tags = [dict(name="article")]
+    remove_tags = [dict(name=["header", "footer", "nav", "script", "style"])]
+
+    recipe_specific_options = {
+        "max_per_section": {
+            "short": "Maximum number of NPR stories per section",
+            "default": "20",
+        },
+        "emit_chapter_markers": {
+            "short": "Compatibility flag used by the news pipeline",
+            "default": "no",
+        },
+    }
+
+    extra_css = """
+        body { font-family: Bookerly, serif; }
+        img { display:block; margin:0.6em auto; max-width:70%; max-height:40%; width:auto; height:auto; }
+        .story-head p { margin:0.2em 0; }
+    """
+
+    def _normalize_article_url(self, href):
+        if not href:
+            return None
+
+        href = href.strip()
+        if not href:
+            return None
+
+        if href.startswith("https://text.npr.org/"):
+            path = href[len("https://text.npr.org") :]
+        elif href.startswith("/"):
+            path = href
+        else:
+            return None
+
+        path = path.split("?", 1)[0].split("#", 1)[0]
+        if not ARTICLE_PATH_RE.match(path):
+            return None
+
+        return urljoin("https://text.npr.org", path)
+
+    def parse_index(self):
+        max_per_section = _safe_int(self.recipe_specific_options.get("max_per_section"), 20)
+        max_per_section = max(1, min(max_per_section, 40))
+
+        sections = [("News", "https://text.npr.org/1001")]
+        feeds = []
+        seen_urls = set()
+
+        for section_name, section_url in sections:
+            soup = self.index_to_soup(section_url)
+            if soup is None:
+                continue
+
+            articles = []
+            for link in soup.findAll("a", href=True):
+                article_url = self._normalize_article_url(link.get("href"))
+                if not article_url or article_url in seen_urls:
+                    continue
+
+                title = " ".join(link.get_text(" ", strip=True).split())
+                if not title:
+                    continue
+
+                articles.append({"title": unescape(title), "url": article_url})
+                seen_urls.add(article_url)
+                if len(articles) >= max_per_section:
+                    break
+
+            if articles:
+                feeds.append((section_name, articles))
+
+        return feeds
+
+    def preprocess_html(self, soup):
+        # Convert relative links to absolute text.npr.org links.
+        for link in soup.findAll("a", href=True):
+            href = link.get("href")
+            if href and href.startswith("/"):
+                link["href"] = urljoin("https://text.npr.org", href)
+        return soup

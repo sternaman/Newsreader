@@ -37,6 +37,15 @@
         "res=mediumThreeByTwo440",
         "emit_chapter_markers=false"
       ]
+    },
+    {
+      "type": "recipe",
+      "title": "NPR Text",
+      "recipe": "/app/recipes/npr_text_x4.recipe",
+      "recipe_options": [
+        "max_per_section=20",
+        "emit_chapter_markers=false"
+      ]
     }
   ]
 }
