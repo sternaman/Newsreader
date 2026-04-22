@@ -17,3 +17,14 @@ services:
       - ./secrets:/secrets:ro
       - ./config:/config:ro
     restart: unless-stopped
+
+  news_web:
+    image: nginx:alpine
+    ports:
+      - "8082:80"
+    volumes:
+      - ./data/news_out:/srv/www:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - news_sync
+    restart: unless-stopped

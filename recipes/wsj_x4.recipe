@@ -37,6 +37,89 @@ _NEXT_DATA_RE = re.compile(
 _AMP_IMG_RE = re.compile(r'\\s+')
 
 
+def _looks_blocked(raw):
+    if not raw:
+        return False
+    if isinstance(raw, bytes):
+        text = raw.decode('utf-8', errors='ignore')
+    else:
+        text = raw
+    markers = (
+        'Please enable JS and disable any ad blocker',
+        'datadome',
+        'dd={',
+        'bot protection',
+    )
+    return any(m in text for m in markers)
+
+
+def _fetch_archive_raw(url, timeout=20):
+    archive_url = 'https://archive.is/latest/' + url
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+        ),
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'identity',
+    }
+    req = Request(archive_url, headers=headers)
+    opener = build_opener()
+    with opener.open(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _load_playwright_cookies(cookie_file):
+    if not cookie_file:
+        return []
+    jar = MozillaCookieJar(cookie_file)
+    jar.load(ignore_discard=True, ignore_expires=True)
+    cookies = []
+    for c in jar:
+        cookie = {
+            'name': c.name,
+            'value': c.value,
+            'domain': c.domain.lstrip('.'),
+            'path': c.path or '/',
+            'httpOnly': bool(c._rest.get('HttpOnly')) if hasattr(c, '_rest') else False,
+            'secure': bool(c.secure),
+        }
+        if c.expires and isinstance(c.expires, (int, float)) and c.expires > 0:
+            exp = int(c.expires)
+            if exp > 10_000_000_000:
+                exp = exp // 1000
+            cookie['expires'] = exp
+        cookies.append(cookie)
+    return cookies
+
+
+def _fetch_playwright_html(url, cookie_file, timeout=60000):
+    from playwright.sync_api import sync_playwright
+    cookies = _load_playwright_cookies(cookie_file)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+            ),
+            java_script_enabled=True,
+            locale='en-US',
+        )
+        if cookies:
+            context.add_cookies(cookies)
+        page = context.new_page()
+        try:
+            from playwright_stealth import stealth_sync
+            stealth_sync(page)
+        except Exception:
+            pass
+        page.goto(url, wait_until='networkidle', timeout=timeout)
+        html = page.content()
+        browser.close()
+    return html.encode('utf-8')
+
+
 def _chapter_label(section, title):
     section = safe_text(section).strip()
     title = safe_text(title).strip()
@@ -278,6 +361,11 @@ class WSJX4(BasicNewsRecipe):
             'long': 'Export cookies from your browser and point this to the file',
             'default': ''
         },
+        'use_playwright': {
+            'short': 'Use Playwright to bypass bot protections (default: yes)',
+            'long': 'Requires Playwright in the docker image; disable to skip headless fetch',
+            'default': 'yes',
+        },
         'emit_chapter_markers': {
             'short': 'Emit X4CHAP markers for XTCH (default: yes)',
             'long': 'Disable for EPUB to avoid showing markers in body',
@@ -367,7 +455,9 @@ class WSJX4(BasicNewsRecipe):
         self.section_by_url = {}
         self._cookie_jar = None
         self.emit_chapter_markers = _bool_option(self.recipe_specific_options.get('emit_chapter_markers'), True)
+        self.use_playwright = _bool_option(self.recipe_specific_options.get('use_playwright'), True)
         cookie_file = self.recipe_specific_options.get('cookie_file')
+        self._cookie_file_path = cookie_file if cookie_file and isinstance(cookie_file, str) else ''
         if cookie_file and isinstance(cookie_file, str) and os.path.exists(cookie_file):
             jar = MozillaCookieJar(cookie_file)
             try:
@@ -578,8 +668,25 @@ class WSJX4(BasicNewsRecipe):
             return resp.read()
 
     def get_obfuscated_article(self, url):
-        raw = self._fetch_raw(url)
-        return {'data': raw, 'url': url}
+        raw = None
+        try:
+            raw = self._fetch_raw(url)
+        except Exception:
+            raw = None
+        if raw and not _looks_blocked(raw):
+            return {'data': raw, 'url': url}
+        if self.use_playwright and self._cookie_file_path:
+            try:
+                raw = _fetch_playwright_html(url, self._cookie_file_path)
+            except Exception:
+                raw = None
+            if raw and not _looks_blocked(raw):
+                return {'data': raw, 'url': url}
+        try:
+            raw = _fetch_archive_raw(url, timeout=getattr(self, 'timeout', 20))
+        except Exception:
+            pass
+        return {'data': raw or b'', 'url': url}
 
     def parse_index(self):
         query = {

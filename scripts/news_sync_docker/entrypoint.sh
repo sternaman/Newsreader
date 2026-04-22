@@ -57,6 +57,7 @@ build_once() {
 }
 
 build_once
+python3 /app/scripts/build_index.py --out-dir "${OUT_DIR}" || true
 
 python3 -m http.server "${PORT}" --directory "${OUT_DIR}" &
 SERVER_PID=$!
@@ -92,4 +93,5 @@ while true; do
     sleep "$sleep_for"
   fi
   build_once || true
+  python3 /app/scripts/build_index.py --out-dir "${OUT_DIR}" || true
 done

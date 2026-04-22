@@ -23,7 +23,8 @@ WORKDIR /app
 COPY scripts/ /app/scripts/
 COPY recipes/ /app/recipes/
 
-RUN pip3 install --no-cache-dir --upgrade pypdfium2 Pillow
+RUN pip3 install --no-cache-dir --upgrade pypdfium2 Pillow playwright playwright-stealth \
+    && python3 -m playwright install --with-deps chromium
 
 COPY scripts/news_sync_docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
