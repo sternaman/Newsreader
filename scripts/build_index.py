@@ -16,13 +16,16 @@ Called from entrypoint.sh after each build_once() cycle.
 """
 
 import argparse
+import gzip
 import html as html_mod
+import json
 import re
 import shutil
 import sys
 import urllib.request
 import zipfile
 from datetime import date, datetime
+from itertools import zip_longest
 from pathlib import Path
 
 # Ensure Unicode article titles print cleanly on Windows consoles
@@ -45,23 +48,92 @@ _FALLBACK_SERIF = "Georgia, 'Times New Roman', serif"
 # Sources rendered first in the nav/index (others appended in filename order)
 _SOURCE_PRIORITY = ["Bloomberg", "Businessweek", "WSJ", "NYTimes", "NPR Text"]
 
+# Bloomberg mobile API section endpoints in descending editorial priority.
+# Each page has top_single_story (hero) and top_stories modules that mirror
+# the bloomberg.com homepage prominence ordering.
+_BB_SECTION_ENDPOINTS = [
+    "/wssmobile/v1/pages/business/phx-markets",
+    "/wssmobile/v1/pages/business/phx-economics-v2",
+    "/wssmobile/v1/pages/business/phx-technology",
+    "/wssmobile/v1/pages/technology/phx-ai",
+    "/wssmobile/v1/pages/business/phx-politics",
+    "/wssmobile/v1/pages/business/phx-industries",
+    "/wssmobile/v1/pages/business/phx-wealth",
+    "/wssmobile/v1/pages/business/phx-green",
+]
+_BB_FEATURED_MODULES = {"top_single_story", "top_stories", "top_stories_1"}
+_BB_API_BASE = "https://cdn-mobapi.bloomberg.com"
+
+
+def _bloomberg_featured_titles() -> list[str]:
+    """Return Bloomberg article titles in live homepage prominence order.
+
+    Fetches the major section pages from the Bloomberg mobile API (same API
+    the Calibre recipe uses) and extracts titles from the featured modules
+    (top_single_story, top_stories). Results are round-robin interleaved
+    across sections so the top story from each section alternates.
+
+    Returns an empty list on any network or parse failure so callers can
+    fall back to the existing feed order gracefully.
+    """
+    featured_per_section: list[list[str]] = []
+    for path in _BB_SECTION_ENDPOINTS:
+        try:
+            req = urllib.request.Request(
+                _BB_API_BASE + path,
+                headers={"Accept-Encoding": "gzip", "User-Agent": _FONT_UA},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw = resp.read()
+            data = json.loads(gzip.decompress(raw))
+            titles: list[str] = []
+            for mod in data.get("modules", []):
+                if mod.get("id") in _BB_FEATURED_MODULES:
+                    for story in mod.get("stories") or []:
+                        t = (story.get("title") or "").strip()
+                        if t:
+                            titles.append(t)
+            featured_per_section.append(titles)
+        except Exception:
+            featured_per_section.append([])
+
+    # Round-robin across sections: top story from each section first
+    seen: set[str] = set()
+    result: list[str] = []
+    for group in zip_longest(*featured_per_section):
+        for t in group or []:
+            if t and t not in seen:
+                result.append(t)
+                seen.add(t)
+    return result
+
+
+def _title_key(title: str) -> str:
+    """Normalize a title for fuzzy matching (lowercase, alphanumeric only)."""
+    return re.sub(r"[^a-z0-9]", "", title.lower())
+
 
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
 
-def _time_ago(date_str: str) -> str:
-    """Date-granular relative time: Today / Yesterday / N days ago."""
-    try:
-        d = date.fromisoformat(date_str)
-        delta = (date.today() - d).days
-        if delta == 0:
-            return "Today"
-        if delta == 1:
-            return "Yesterday"
-        return f"{delta} days ago"
-    except ValueError:
-        return date_str
+def _format_ts(ts: datetime) -> str:
+    """Format a datetime as a concise publish time.
+
+    Same day  → '2:34 PM'
+    Yesterday → 'Yesterday 2:34 PM'
+    Older     → 'Apr 28, 2:34 PM'
+    """
+    today = datetime.now().date()
+    ts_date = ts.date()
+    # %I gives zero-padded hour; lstrip removes it ("02:34" → "2:34")
+    time_str = ts.strftime("%I:%M %p").lstrip("0") or "12:00 AM"
+    delta = (today - ts_date).days
+    if delta == 0:
+        return time_str
+    if delta == 1:
+        return f"Yesterday {time_str}"
+    return f"{ts.strftime('%b')} {ts_date.day}, {time_str}"
 
 
 def _strip_tags(s: str) -> str:
@@ -417,7 +489,7 @@ def _cleanup_stale(out_dir: Path, active_keys: set[str]) -> None:
 # ---------------------------------------------------------------------------
 
 _READER_CSS_TEMPLATE = """\
-/* CrossPoint News — article reader stylesheet */
+/* Bloomberg — article reader stylesheet */
 {font_import}
 
 :root {{ --red: #ed1c24; }}
@@ -428,22 +500,22 @@ body {{
   font-family: 'Source Serif 4', {fallback};
   font-size: 18px;
   line-height: 1.7;
-  color: #111;
+  color: #e0e0e0;
   margin: 0;
   padding: 1rem;
-  background: #fff;
+  background: #111;
 }}
 
 .back-nav {{
   max-width: 680px;
   margin: 0 auto 1.5rem;
   padding-bottom: 0.75rem;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid #2c2c2c;
 }}
 
 .back-nav a {{
   text-decoration: none;
-  color: #555;
+  color: #888;
   font-size: 0.85rem;
   font-family: Arial, sans-serif;
 }}
@@ -471,7 +543,7 @@ h2, h3, h4 {{
 p {{ margin-bottom: 1.25em; }}
 
 .auth, p.auth {{
-  color: #555;
+  color: #888;
   font-size: 0.85rem;
   margin-bottom: 1.5rem;
   font-family: Arial, sans-serif;
@@ -479,7 +551,7 @@ p {{ margin-bottom: 1.25em; }}
 
 .subhead, .standfirst {{
   font-style: italic;
-  color: #333;
+  color: #bbb;
   margin-bottom: 1.5rem;
 }}
 
@@ -494,7 +566,7 @@ blockquote {{
   border-left: 3px solid var(--red);
   margin-left: 0;
   padding-left: 1.25rem;
-  color: #444;
+  color: #aaa;
   font-style: italic;
 }}
 
@@ -522,8 +594,15 @@ def _write_reader_css(out_dir: Path, fonts_available: bool) -> None:
 def _build_index_html(
     all_articles: list[dict],
     font_css: str,
+    bb_featured: list[str] | None = None,
 ) -> str:
     """Produce the Bloomberg-style index.html as a string."""
+
+    # Normalize featured titles to keys for fast lookup
+    _bb_featured: dict[str, int] = (
+        {_title_key(t): i for i, t in enumerate(bb_featured)}
+        if bb_featured else {}
+    )
 
     # Source order: priority list first, then others in appearance order
     sources_ordered: list[str] = []
@@ -537,8 +616,9 @@ def _build_index_html(
     serif = f"'Playfair Display', {_FALLBACK_SERIF}"
     body_font = f"'Source Serif 4', {_FALLBACK_SERIF}"
 
-    # ── Hero: most-recent article with thumb from top source; rail = next 4 ──
+    # ── Hero: full-width featured article from top source ───────────────────
     hero_html = ""
+    hero_excluded: set[str] = set()
     if all_articles and sources_ordered:
         hero_src = sources_ordered[0]
         src_arts = sorted(
@@ -547,7 +627,7 @@ def _build_index_html(
         )
         h = next((a for a in src_arts if a.get("thumb")), src_arts[0] if src_arts else None)
         if h:
-            rail = [a for a in src_arts if a["href"] != h["href"]][:4]
+            hero_excluded = {h["href"]}
 
             hero_img = (
                 f'<a href="{_he(h["href"])}" class="hero-img-link">'
@@ -555,33 +635,14 @@ def _build_index_html(
                 f'</a>\n'
             ) if h.get("thumb") else ""
 
-            rail_items = ""
-            for ra in rail:
-                ri_img = (
-                    f'<a href="{_he(ra["href"])}" class="rail-img-link">'
-                    f'<img class="rail-thumb" src="{_he(ra["thumb"])}" alt="" loading="lazy">'
-                    f'</a>\n'
-                ) if ra.get("thumb") else ""
-                rail_items += (
-                    f'<div class="rail-item">\n'
-                    + ri_img
-                    + f'<a class="rail-title" href="{_he(ra["href"])}">{_he(ra["title"])}</a>\n'
-                    + f'<span class="rail-date">{_he(_time_ago(ra["date"]))}</span>\n'
-                    + '</div>\n'
-                )
-
             hero_html = (
                 f'<section class="hero-section" data-source="{_he(_slug(hero_src))}">\n'
-                '<div class="hero-grid">\n'
-                '<div class="hero-main">\n'
                 + hero_img
                 + f'<div class="hero-eyebrow">{_he(hero_src)}</div>\n'
                 + f'<h2><a href="{_he(h["href"])}">{_he(h["title"])}</a></h2>\n'
                 + (f'<p class="hero-desc">{_he(h["desc"])}</p>\n' if h["desc"] else "")
-                + f'<div class="hero-date">{_he(_time_ago(h["date"]))}</div>\n'
-                + '</div>\n'
-                + (f'<div class="hero-rail">\n{rail_items}</div>\n' if rail_items else "")
-                + '</div>\n</section>\n'
+                + f'<div class="hero-date">{_he(_format_ts(h["ts"]))}</div>\n'
+                + '</section>\n'
                 + '<hr class="divider">'
             )
 
@@ -606,6 +667,26 @@ def _build_index_html(
             section_order[src].append(sec)
         by_source[src][sec].append(a)
 
+    def _article_card(art: dict, show_category: bool = False) -> str:
+        thumb_html = (
+            f'<a href="{_he(art["href"])}" class="article-thumb-link">'
+            f'<img class="article-thumb" src="{_he(art["thumb"])}" alt="" loading="lazy">'
+            f'</a>\n'
+        ) if art.get("thumb") else ""
+        cat_html = (
+            f'<span class="article-category">{_he(art["section"])}</span>\n'
+        ) if show_category else ""
+        return (
+            '<li class="article-item">\n'
+            + thumb_html
+            + '<div class="article-body">\n'
+            + cat_html
+            + f'<a class="article-title" href="{_he(art["href"])}">{_he(art["title"])}</a>\n'
+            + f'<span class="article-date">{_he(_format_ts(art["ts"]))}</span>\n'
+            + (f'<p class="article-desc">{_he(art["desc"][:140])}</p>\n' if art["desc"] else "")
+            + '</div>\n</li>'
+        )
+
     sections_parts: list[str] = []
     for src in sources_ordered:
         src_secs = by_source.get(src, {})
@@ -619,44 +700,106 @@ def _build_index_html(
         except ValueError:
             date_display = first_art["date"]
 
-        cat_blocks: list[str] = []
-        for sec in section_order.get(src, []):
-            arts = sorted(src_secs[sec], key=lambda a: a["ts"], reverse=True)
-            items: list[str] = []
-            for art in arts:
-                thumb_html = (
+        if src == "Bloomberg":
+            # Round-robin interleave across sections as baseline order,
+            # then re-sort by live Bloomberg homepage prominence if available.
+            section_lists = [src_secs[sec] for sec in section_order.get(src, [])]
+            flat_arts = [
+                art for group in zip_longest(*section_lists)
+                for art in group
+                if art is not None and art["href"] not in hero_excluded
+            ]
+            if _bb_featured:
+                fallback = len(_bb_featured)
+                flat_arts.sort(key=lambda a: _bb_featured.get(_title_key(a["title"]), fallback))
+
+            # Split: top-6 featured articles → prominent 2-col block;
+            # remainder → regular 3-col grid.
+            def _is_featured(art: dict) -> bool:
+                return _bb_featured.get(_title_key(art["title"])) is not None
+
+            top_arts = [a for a in flat_arts if _is_featured(a)][:6]
+            top_hrefs = {a["href"] for a in top_arts}
+            rest_arts = [a for a in flat_arts if a["href"] not in top_hrefs]
+
+            def _top_story_card(art: dict) -> str:
+                img_html = (
                     f'<a href="{_he(art["href"])}" class="article-thumb-link">'
-                    f'<img class="article-thumb" src="{_he(art["thumb"])}" alt="" loading="lazy">'
+                    f'<img class="ts-img" src="{_he(art["thumb"])}" alt="" loading="lazy">'
                     f'</a>\n'
                 ) if art.get("thumb") else ""
-                items.append(
-                    '<li class="article-item">\n'
-                    + thumb_html
-                    + '<div class="article-body">\n'
-                    + f'<a class="article-title" href="{_he(art["href"])}">{_he(art["title"])}</a>\n'
-                    + f'<span class="article-date">{_he(_time_ago(art["date"]))}</span>\n'
-                    + (f'<p class="article-desc">{_he(art["desc"][:140])}</p>\n' if art["desc"] else "")
-                    + '</div>\n</li>'
+                return (
+                    '<li class="ts-item">\n'
+                    + img_html
+                    + f'<span class="article-category">{_he(art["section"])}</span>\n'
+                    + f'<a class="ts-title" href="{_he(art["href"])}">{_he(art["title"])}</a>\n'
+                    + f'<span class="article-date">{_he(_format_ts(art["ts"]))}</span>\n'
+                    + (f'<p class="article-desc">{_he(art["desc"][:160])}</p>\n' if art["desc"] else "")
+                    + '</li>'
                 )
-            cat_blocks.append(
-                '<div class="category-block">\n'
-                f'<div class="category-label"><span>{_he(sec)}</span></div>\n'
-                '<ul class="article-list">\n'
-                + "\n".join(items) + "\n"
-                + '</ul>\n</div>'
+
+            top_block = ""
+            if top_arts:
+                top_items = "\n".join(_top_story_card(a) for a in top_arts)
+                top_block = (
+                    '<div class="ts-label"><span>Top Stories</span></div>\n'
+                    '<ul class="ts-grid">\n' + top_items + "\n</ul>\n"
+                    '<hr class="divider" style="margin:1.5rem 0 0">\n'
+                )
+
+            rest_items = [_article_card(art, show_category=True) for art in rest_arts]
+            rest_block = (
+                '<ul class="article-list">\n' + "\n".join(rest_items) + "\n</ul>"
+            ) if rest_items else ""
+
+            # Bloomberg: no source header — Top Stories label is sufficient
+            sections_parts.append(
+                f'<section class="source-section" data-source="{_he(slug)}">\n'
+                + top_block
+                + rest_block + "\n"
+                + "</section>"
+            )
+        else:
+            cat_blocks: list[str] = []
+            for sec in section_order.get(src, []):
+                arts = sorted(src_secs[sec], key=lambda a: a["ts"], reverse=True)
+                items = [_article_card(art) for art in arts]
+                cat_blocks.append(
+                    '<div class="category-block">\n'
+                    f'<div class="category-label"><span>{_he(sec)}</span></div>\n'
+                    '<ul class="article-list">\n'
+                    + "\n".join(items) + "\n"
+                    + '</ul>\n</div>'
+                )
+            sections_parts.append(
+                f'<section class="source-section" data-source="{_he(slug)}">\n'
+                '<div class="source-label">'
+                f'<span class="source-name">{_he(src)}</span>'
+                '</div>\n'
+                + "\n".join(cat_blocks) + "\n"
+                + "</section>"
             )
 
-        sections_parts.append(
-            f'<section class="source-section" data-source="{_he(slug)}">\n'
-            '<div class="source-label">'
-            f'<span class="source-name">{_he(src)}</span>'
-            f'<span class="source-date">{_he(date_display)}</span>'
-            '</div>\n'
-            + "\n".join(cat_blocks) + "\n"
-            + "</section>"
-        )
-
     sections_html = "\n<hr class=\"section-divider\">\n".join(sections_parts)
+
+    # ── Latest rail: 10 most-recent articles across all sources ─────────────
+    latest_arts = sorted(all_articles, key=lambda a: a["ts"], reverse=True)[:15]
+    latest_items = ""
+    for la in latest_arts:
+        latest_items += (
+            '<li class="latest-item">\n'
+            f'<span class="latest-source">{_he(la["source"])}</span>\n'
+            f'<a class="latest-title" href="{_he(la["href"])}">{_he(la["title"])}</a>\n'
+            f'<span class="latest-time">{_he(_format_ts(la["ts"]))}</span>\n'
+            '</li>\n'
+        )
+    latest_html = (
+        '<aside id="latest-rail" class="latest-rail">\n'
+        '<div class="latest-header">Latest</div>\n'
+        f'<ol class="latest-list">\n{latest_items}</ol>\n'
+        '</aside>'
+    )
+
     today_d = date.today()
     today_display = f"{today_d.strftime('%B')} {today_d.day}, {today_d.year}"
 
@@ -665,86 +808,108 @@ def _build_index_html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CrossPoint News</title>
+<title>Bloomberg</title>
 <style>
 {font_css}
 
 :root {{
   --red: #ed1c24;
-  --black: #000;
-  --white: #fff;
-  --gray: #767676;
+  --text: #e0e0e0;
+  --bg: #111;
+  --gray: #888;
+  --border: #2c2c2c;
   --serif: {serif};
   --body: {body_font};
   --max: 1100px;
 }}
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: var(--body); background: var(--white); color: var(--black); font-size: 15px; line-height: 1.5; }}
+body {{ font-family: var(--body); background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; }}
 
 /* Header */
-header {{ background: var(--black); position: sticky; top: 0; z-index: 100; }}
+header {{ background: #000; position: sticky; top: 0; z-index: 100; }}
 .header-inner {{
   max-width: var(--max); margin: 0 auto; padding: 0.55rem 1.25rem;
   display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
 }}
 .site-name {{
   font-family: var(--serif); font-size: 1.25rem; font-weight: 900;
-  color: var(--white); letter-spacing: -0.01em; white-space: nowrap; text-transform: uppercase;
+  color: #e0e0e0; letter-spacing: -0.01em; white-space: nowrap; text-transform: uppercase;
 }}
 nav {{ display: flex; gap: 0.2rem; flex-wrap: wrap; }}
 .filter {{
   background: none; border: 1px solid rgba(255,255,255,0.25); border-radius: 2px;
   padding: 0.18rem 0.5rem; cursor: pointer; font-size: 0.7rem;
-  font-family: Arial, sans-serif; color: rgba(255,255,255,0.75);
+  font-family: Arial, sans-serif; color: rgba(255,255,255,0.65);
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }}
-.filter:hover, .filter.active {{ background: var(--white); color: var(--black); border-color: var(--white); }}
+.filter:hover, .filter.active {{ background: #e0e0e0; color: #111; border-color: #e0e0e0; }}
 
-.container {{ max-width: var(--max); margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }}
-hr.divider {{ border: none; border-top: 3px solid var(--black); margin: 0 0 1.75rem; }}
-hr.section-divider {{ border: none; border-top: 1px solid #ddd; margin: 0; }}
+.page-grid {{
+  max-width: 1280px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem;
+  display: grid; grid-template-columns: 1fr 260px; gap: 0 2.5rem; align-items: start;
+}}
+.main-content {{ min-width: 0; }}
+hr.divider {{ border: none; border-top: 3px solid #444; margin: 0 0 1.75rem; }}
+hr.section-divider {{ border: none; border-top: 1px solid var(--border); margin: 0; }}
 
-/* Hero */
+/* Latest rail */
+.latest-rail {{
+  position: sticky; top: 4rem;
+  border-left: 3px solid var(--red); padding-left: 1.1rem;
+}}
+.latest-header {{
+  font-family: Arial, sans-serif; font-size: 0.65rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.14em;
+  color: var(--red); margin-bottom: 0.75rem;
+}}
+.latest-list {{ list-style: none; }}
+.latest-item {{
+  padding: 0.65rem 0; border-bottom: 1px solid var(--border);
+}}
+.latest-item:first-child {{ padding-top: 0; }}
+.latest-item:last-child {{ border-bottom: none; }}
+.latest-source {{
+  display: block; font-family: Arial, sans-serif;
+  font-size: 0.55rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--red); margin-bottom: 0.18rem;
+}}
+.latest-title {{
+  display: block; font-family: var(--serif); font-size: 0.8rem;
+  font-weight: 700; line-height: 1.3; color: var(--text);
+  text-decoration: none; margin-bottom: 0.18rem;
+}}
+.latest-title:hover {{ color: var(--red); }}
+.latest-time {{
+  font-family: Arial, sans-serif; font-size: 0.58rem; color: var(--gray);
+}}
+
+/* Hero — full-width featured story */
 .hero-section {{ padding: 1.5rem 0 2rem; }}
-.hero-grid {{ display: grid; grid-template-columns: 5fr 2fr; gap: 2rem; align-items: start; }}
-.hero-img-link {{ display: block; overflow: hidden; margin-bottom: 0.7rem; }}
-.hero-img {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }}
-.hero-img:hover {{ opacity: 0.9; }}
+.hero-img-link {{ display: block; overflow: hidden; margin-bottom: 0.85rem; }}
+.hero-img {{ width: 100%; max-height: 480px; object-fit: cover; display: block; }}
+.hero-img:hover {{ opacity: 0.88; }}
 .hero-eyebrow {{
   text-transform: uppercase; font-size: 0.63rem; letter-spacing: 0.14em;
   color: var(--red); font-weight: 700; margin-bottom: 0.4rem; font-family: Arial, sans-serif;
 }}
-.hero-main h2 {{
-  font-family: var(--serif); font-size: clamp(1.5rem, 3vw, 2.3rem);
-  font-weight: 700; line-height: 1.15; margin-bottom: 0.5rem;
+.hero-section h2 {{
+  font-family: var(--serif); font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  font-weight: 700; line-height: 1.12; margin-bottom: 0.55rem; max-width: 800px;
 }}
-.hero-main h2 a {{ color: inherit; text-decoration: none; }}
-.hero-main h2 a:hover {{ color: var(--red); }}
-.hero-desc {{ font-size: 0.95rem; line-height: 1.5; color: #444; margin-bottom: 0.4rem; }}
+.hero-section h2 a {{ color: inherit; text-decoration: none; }}
+.hero-section h2 a:hover {{ color: var(--red); }}
+.hero-desc {{ font-size: 1rem; line-height: 1.55; color: #aaa; margin-bottom: 0.4rem; max-width: 680px; }}
 .hero-date {{ font-size: 0.67rem; color: var(--gray); font-family: Arial, sans-serif; }}
-.hero-rail {{ border-left: 1px solid #e0e0e0; padding-left: 1.5rem; display: flex; flex-direction: column; }}
-.rail-item {{ padding: 0.7rem 0; border-bottom: 1px solid #ebebeb; }}
-.rail-item:first-child {{ padding-top: 0; }}
-.rail-item:last-child {{ border-bottom: none; }}
-.rail-img-link {{ display: block; overflow: hidden; margin-bottom: 0.3rem; }}
-.rail-thumb {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }}
-.rail-thumb:hover {{ opacity: 0.9; }}
-.rail-title {{
-  font-family: var(--serif); font-size: 0.87rem; font-weight: 700;
-  line-height: 1.3; color: var(--black); text-decoration: none; display: block; margin-bottom: 0.15rem;
-}}
-.rail-title:hover {{ color: var(--red); }}
-.rail-date {{ font-size: 0.63rem; color: var(--gray); font-family: Arial, sans-serif; }}
 
 /* Source sections */
 .source-section {{ padding: 1.5rem 0; }}
 .source-label {{
   display: flex; align-items: baseline; gap: 0.75rem;
-  border-bottom: 3px solid var(--black); padding-bottom: 0.5rem; margin-bottom: 1.25rem;
+  border-bottom: 3px solid #444; padding-bottom: 0.5rem; margin-bottom: 1.25rem;
 }}
 .source-name {{
   font-family: Arial, Helvetica, sans-serif; font-size: 1rem; font-weight: 900;
-  color: var(--black); text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--text); text-transform: uppercase; letter-spacing: 0.03em;
 }}
 .source-date {{ font-size: 0.67rem; color: var(--gray); font-family: Arial, sans-serif; }}
 
@@ -756,65 +921,106 @@ hr.section-divider {{ border: none; border-top: 1px solid #ddd; margin: 0; }}
   font-family: Arial, sans-serif; font-size: 0.68rem; font-weight: 700;
   color: var(--red); text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap;
 }}
-.category-label::after {{ content: ''; flex: 1; height: 1px; background: #ddd; }}
+.category-label::after {{ content: ''; flex: 1; height: 1px; background: var(--border); }}
 
 /* Article grid */
 .article-list {{ list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 2rem; }}
-.article-item {{ padding: 0.85rem 0; border-bottom: 1px solid #ebebeb; display: flex; flex-direction: column; }}
+.article-item {{ padding: 0.85rem 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; }}
 .article-item:last-child {{ border-bottom: none; }}
 .article-thumb-link {{ display: block; overflow: hidden; margin-bottom: 0.4rem; }}
 .article-thumb {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }}
-.article-thumb:hover {{ opacity: 0.9; }}
+.article-thumb:hover {{ opacity: 0.85; }}
 .article-body {{ display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }}
 .article-title {{
   font-family: var(--serif); font-size: 0.9rem; font-weight: 700;
-  color: var(--black); text-decoration: none; line-height: 1.3;
+  color: var(--text); text-decoration: none; line-height: 1.3;
 }}
 .article-title:hover {{ color: var(--red); }}
 .article-date {{ font-size: 0.63rem; color: var(--gray); font-family: Arial, sans-serif; }}
-.article-desc {{ font-size: 0.78rem; color: #555; line-height: 1.4; }}
+.article-category {{
+  font-size: 0.58rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--red); font-family: Arial, sans-serif;
+}}
+.article-desc {{ font-size: 0.78rem; color: #aaa; line-height: 1.4; }}
+
+/* Top Stories block */
+.ts-label {{
+  display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem;
+}}
+.ts-label span {{
+  font-family: Arial, sans-serif; font-size: 0.68rem; font-weight: 700;
+  color: var(--red); text-transform: uppercase; letter-spacing: 0.12em; white-space: nowrap;
+}}
+.ts-label::after {{ content: ''; flex: 1; height: 1px; background: var(--border); }}
+.ts-grid {{
+  list-style: none;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem 2.5rem;
+}}
+.ts-item {{ display: flex; flex-direction: column; gap: 0.25rem; }}
+.ts-img {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; margin-bottom: 0.35rem; }}
+.ts-img:hover {{ opacity: 0.85; }}
+.ts-title {{
+  font-family: var(--serif); font-size: 1.05rem; font-weight: 700;
+  line-height: 1.25; color: var(--text); text-decoration: none;
+}}
+.ts-title:hover {{ color: var(--red); }}
 
 footer {{
-  border-top: 3px solid var(--black); padding: 0.85rem 1.25rem;
+  border-top: 3px solid #333; padding: 0.85rem 1.25rem;
   text-align: center; font-size: 0.67rem; color: var(--gray);
   font-family: Arial, sans-serif; max-width: var(--max); margin: 2rem auto 0;
 }}
 
+@media (max-width: 1060px) {{
+  .page-grid {{ grid-template-columns: 1fr; }}
+  .latest-rail {{ display: none; }}
+}}
 @media (max-width: 900px) {{
-  .hero-grid {{ grid-template-columns: 1fr; }}
-  .hero-rail {{
-    border-left: none; padding-left: 0;
-    border-top: 1px solid #e0e0e0; padding-top: 1rem; margin-top: 1rem;
-    flex-direction: row; flex-wrap: wrap; gap: 0 1.5rem;
-  }}
-  .rail-item {{ flex: 1 1 45%; }}
+  .ts-grid {{ grid-template-columns: repeat(2, 1fr); }}
   .article-list {{ grid-template-columns: repeat(2, 1fr); }}
 }}
 @media (max-width: 560px) {{
-  .hero-rail {{ flex-direction: column; }}
-  .rail-item {{ flex: none; }}
+  .ts-grid {{ grid-template-columns: 1fr; }}
   .article-list {{ grid-template-columns: 1fr; }}
 }}
+
+#refresh-banner {{
+  position: fixed; bottom: 1.5rem; left: 50%;
+  transform: translateX(-50%) translateY(120px);
+  background: var(--red); color: #fff;
+  padding: 0.55rem 1.25rem; border-radius: 2rem;
+  font-family: Arial, sans-serif; font-size: 0.78rem; font-weight: 700;
+  cursor: pointer; z-index: 200; white-space: nowrap;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.55);
+  transition: transform 0.3s cubic-bezier(.34,1.56,.64,1);
+  border: none;
+}}
+#refresh-banner.visible {{ transform: translateX(-50%) translateY(0); }}
 </style>
 </head>
 <body>
 <header>
   <div class="header-inner">
-    <div class="site-name">CrossPoint News</div>
+    <div class="site-name">Bloomberg</div>
     <nav id="source-filters">
       {nav_html}
     </nav>
   </div>
 </header>
 <main>
-  <div class="container">
-    {hero_html}
-    {sections_html}
+  <div class="page-grid">
+    <div class="main-content">
+      {hero_html}
+      {sections_html}
+    </div>
+    {latest_html}
   </div>
 </main>
-<footer>CrossPoint News &mdash; {today_display}</footer>
+<footer>Bloomberg &mdash; {today_display}</footer>
+<button id="refresh-banner" aria-live="polite" style="display:none"></button>
 <script>
 (function () {{
+  /* Source filter */
   var btns = document.querySelectorAll('.filter');
   btns.forEach(function (btn) {{
     btn.addEventListener('click', function () {{
@@ -826,6 +1032,48 @@ footer {{
       }});
     }});
   }});
+
+  /* Auto-refresh: poll every 20 min, show toast if new articles land */
+  var known = new Set();
+  document.querySelectorAll('a[href*="articles/"]').forEach(function (a) {{
+    known.add(a.pathname);
+  }});
+
+  var banner = document.getElementById('refresh-banner');
+  banner.addEventListener('click', function () {{ location.reload(); }});
+
+  var rail = document.getElementById('latest-rail');
+
+  function checkForNew() {{
+    fetch('index.html?_=' + Date.now())
+      .then(function (r) {{ return r.text(); }})
+      .then(function (html) {{
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+
+        /* Count genuinely new articles */
+        var count = 0;
+        doc.querySelectorAll('a[href*="articles/"]').forEach(function (a) {{
+          if (!known.has(a.pathname)) count++;
+        }});
+
+        /* Swap latest rail content silently regardless of new-article count */
+        var newRail = doc.getElementById('latest-rail');
+        if (newRail && rail) {{
+          rail.innerHTML = newRail.innerHTML;
+        }}
+
+        if (count > 0) {{
+          banner.textContent = count + ' new article' + (count === 1 ? '' : 's') + ' — Refresh';
+          banner.style.display = '';
+          requestAnimationFrame(function () {{
+            requestAnimationFrame(function () {{ banner.classList.add('visible'); }});
+          }});
+        }}
+      }})
+      .catch(function () {{}});
+  }}
+
+  setInterval(checkForNew, 20 * 60 * 1000);
 }})();
 </script>
 </body>
@@ -838,7 +1086,7 @@ def _empty_index() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CrossPoint News</title>
+<title>Bloomberg</title>
 <style>
 body { font-family: Georgia, serif; background: #fff; color: #000; margin: 0; }
 header { border-bottom: 4px solid #000; padding: 0.75rem 1.25rem; }
@@ -849,7 +1097,7 @@ header { border-bottom: 4px solid #000; padding: 0.75rem 1.25rem; }
 </style>
 </head>
 <body>
-<header><div class="site-name">CrossPoint News</div></header>
+<header><div class="site-name">Bloomberg</div></header>
 <main>
 <div class="empty">
   <h2>No articles yet</h2>
@@ -908,8 +1156,18 @@ def main() -> None:
         except Exception as exc:
             print(f"ERROR processing {epub.name}: {exc}")
 
-    # 6. Build index.html
-    index_html = _build_index_html(all_articles, font_css)
+    # 6. Fetch live Bloomberg homepage prominence order (best-effort)
+    bb_featured: list[str] = []
+    if any(a["source"] == "Bloomberg" for a in all_articles):
+        print("Fetching Bloomberg homepage prominence order…")
+        try:
+            bb_featured = _bloomberg_featured_titles()
+            print(f"  {len(bb_featured)} featured titles retrieved")
+        except Exception as exc:
+            print(f"  WARNING: could not fetch Bloomberg prominence: {exc}")
+
+    # 7. Build index.html
+    index_html = _build_index_html(all_articles, font_css, bb_featured=bb_featured)
     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
     print(f"Wrote index.html — {len(all_articles)} articles from {len(epubs)} sources")
 
