@@ -46,7 +46,7 @@ _FONT_UA = (
 )
 _FALLBACK_SERIF = "Georgia, 'Times New Roman', serif"
 # Sources rendered first in the nav/index (others appended in filename order)
-_SOURCE_PRIORITY = ["Bloomberg", "Businessweek", "WSJ", "NYTimes", "NPR Text"]
+_SOURCE_PRIORITY = ["Bloomberg", "Bloomberg Weekends", "Businessweek"]
 
 # Bloomberg mobile API section endpoints in descending editorial priority.
 # Each page has top_single_story (hero) and top_stories modules that mirror
