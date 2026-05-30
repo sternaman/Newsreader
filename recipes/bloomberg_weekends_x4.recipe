@@ -91,7 +91,7 @@ class BloombergWeekendsX4(BasicNewsRecipe):
     scale_news_images = (360, 480)
     masthead_url = 'https://assets.bbhub.io/company/sites/70/2022/09/logoBBGblck.svg'
     description = 'Bloomberg Weekend Edition features'
-    oldest_article = 1.2  # days
+    oldest_article = 7.0  # days — weekend content accumulates over the week
     resolve_internal_links = True
     remove_empty_feeds = True
     cover_url = 'https://assets.bwbx.io/images/users/iqjWHBFdfxIU/ivUxvlPidC3M/v0/600x-1.jpg'
