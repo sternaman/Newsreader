@@ -625,32 +625,46 @@ _READER_CSS_TEMPLATE = """\
 /* Bloomberg — article reader stylesheet */
 {font_import}
 
-:root {{ --red: #ed1c24; }}
+:root {{
+  --red: #ed1c24;
+  --text: #e0e0e0;
+  --bg: #111;
+  --muted: #888;
+  --border: #2c2c2c;
+}}
 
 *, *::before, *::after {{ box-sizing: border-box; }}
+
+html {{
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-top: 0;
+}}
 
 body {{
   font-family: 'Source Serif 4', {fallback};
   font-size: 18px;
   line-height: 1.7;
-  color: #e0e0e0;
+  color: var(--text);
   margin: 0;
   padding: 1rem;
-  background: #111;
+  background: var(--bg);
+  overflow-x: hidden;
 }}
 
 .back-nav {{
   max-width: 680px;
   margin: 0 auto 1.5rem;
   padding-bottom: 0.75rem;
-  border-bottom: 1px solid #2c2c2c;
+  border-bottom: 1px solid var(--border);
 }}
 
 .back-nav a {{
   text-decoration: none;
-  color: #888;
+  color: var(--muted);
   font-size: 0.85rem;
   font-family: Arial, sans-serif;
+  padding: 0.25rem 0;
+  display: inline-block;
 }}
 
 .back-nav a:hover {{ color: var(--red); }}
@@ -662,21 +676,39 @@ body {{
 
 h1 {{
   font-family: 'Playfair Display', {fallback};
-  font-size: 2rem;
+  font-size: clamp(1.6rem, 5vw, 2rem);
   font-weight: 700;
   line-height: 1.2;
   margin-bottom: 0.5rem;
 }}
 
-h2, h3, h4 {{
+h2 {{
   font-family: 'Playfair Display', {fallback};
+  font-size: clamp(1.3rem, 4vw, 1.5rem);
   margin: 1.5rem 0 0.5rem;
 }}
 
-p {{ margin-bottom: 1.25em; }}
+h3 {{
+  font-family: 'Playfair Display', {fallback};
+  font-size: clamp(1.1rem, 3.5vw, 1.25rem);
+  margin: 1.25rem 0 0.4rem;
+}}
+
+h4 {{
+  font-family: 'Playfair Display', {fallback};
+  font-size: 1.05rem;
+  margin: 1rem 0 0.3rem;
+}}
+
+p {{
+  margin-bottom: 1.25em;
+  text-align: left;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+}}
 
 .auth, p.auth {{
-  color: #888;
+  color: var(--muted);
   font-size: 0.85rem;
   margin-bottom: 1.5rem;
   font-family: Arial, sans-serif;
@@ -686,6 +718,7 @@ p {{ margin-bottom: 1.25em; }}
   font-style: italic;
   color: #bbb;
   margin-bottom: 1.5rem;
+  font-size: 1.05em;
 }}
 
 img {{
@@ -693,12 +726,13 @@ img {{
   height: auto;
   display: block;
   margin: 1.5rem auto;
+  border-radius: 2px;
 }}
 
 blockquote {{
   border-left: 3px solid var(--red);
-  margin-left: 0;
-  padding-left: 1.25rem;
+  margin: 1.5rem 0;
+  padding: 0.5rem 0 0.5rem 1.25rem;
   color: #aaa;
   font-style: italic;
 }}
@@ -706,15 +740,96 @@ blockquote {{
 .img-cap, .figc {{
   font-size: 0.8rem;
   text-align: center;
-  color: #777;
+  color: var(--muted);
   margin-top: -1rem;
   margin-bottom: 1.5rem;
+}}
+
+/* Tables in articles */
+table {{
+  width: 100%;
+  max-width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.9em;
+  overflow-x: auto;
+  display: block;
+}}
+
+th, td {{
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}}
+
+th {{
+  background: #1a1a1a;
+  font-weight: 700;
+}}
+
+/* Lists */
+ul, ol {{
+  margin: 1rem 0 1.25rem 1.5rem;
+}}
+
+li {{
+  margin-bottom: 0.5rem;
+}}
+
+/* Links */
+a {{
+  color: var(--text);
+  text-decoration: none;
+}}
+
+a:hover {{
+  color: var(--red);
+  text-decoration: underline;
 }}
 
 /* Hide Calibre internal markers */
 .x4-chap-marker {{ display: none !important; }}
 .calibre_navbar {{ display: none !important; }}
 .toc-page {{ display: none !important; }}
+
+/* Mobile adjustments */
+@media (max-width: 600px) {{
+  body {{
+    font-size: 17px;
+    line-height: 1.65;
+    padding: 0.75rem;
+  }}
+  .back-nav {{
+    margin-bottom: 1rem;
+  }}
+  .back-nav a {{
+    font-size: 0.9rem;
+    padding: 0.5rem 0;
+  }}
+  h1 {{
+    font-size: clamp(1.5rem, 7vw, 1.8rem);
+  }}
+  img {{
+    margin: 1.25rem 0;
+  }}
+  blockquote {{
+    margin: 1.25rem 0;
+    padding-left: 1rem;
+  }}
+  table {{
+    font-size: 0.8em;
+  }}
+  th, td {{
+    padding: 0.4rem 0.5rem;
+  }}
+}}
+
+/* Larger desktop */
+@media (min-width: 900px) {{
+  body {{
+    font-size: 19px;
+  }}
+}}
 """
 
 
@@ -950,6 +1065,10 @@ def _build_index_html(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bloomberg</title>
+<meta name="theme-color" content="#111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
 <style>
 {font_css}
 
@@ -1122,16 +1241,148 @@ footer {{
 
 /* Responsive */
 @media (max-width: 1060px) {{
-  .page-grid {{ grid-template-columns: 1fr; }}
-  .latest-rail {{ display: none; }}
+  .page-grid {{
+    grid-template-columns: 1fr;
+  }}
+  .latest-rail {{
+    position: static;
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+  }}
+  .latest-header {{
+    font-family: Arial, sans-serif;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--red);
+    margin-bottom: 0.75rem;
+  }}
+  .latest-list {{
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0 1rem;
+  }}
+  .latest-item {{
+    padding: 0.5rem 0;
+    border-bottom: none;
+  }}
 }}
+
 @media (max-width: 900px) {{
-  .ts-grid {{ grid-template-columns: repeat(2, 1fr); }}
-  .article-list {{ grid-template-columns: repeat(2, 1fr); }}
+  .ts-grid {{
+    grid-template-columns: repeat(2, 1fr);
+  }}
+  .article-list {{
+    grid-template-columns: repeat(2, 1fr);
+  }}
+  .hero-img {{
+    max-height: 300px;
+  }}
+  .header-inner {{
+    padding: 0.4rem 1rem;
+  }}
 }}
-@media (max-width: 560px) {{
-  .ts-grid {{ grid-template-columns: 1fr; }}
-  .article-list {{ grid-template-columns: 1fr; }}
+
+@media (max-width: 600px) {{
+  .ts-grid {{
+    grid-template-columns: 1fr;
+  }}
+  .article-list {{
+    grid-template-columns: 1fr;
+  }}
+  .latest-list {{
+    grid-template-columns: 1fr;
+  }}
+  .hero-img {{
+    max-height: 220px;
+  }}
+  .hero-section h2 {{
+    font-size: 1.5rem;
+  }}
+  .hero-desc {{
+    font-size: 0.85rem;
+  }}
+  .header-inner {{
+    padding: 0.35rem 0.75rem;
+  }}
+  .site-name {{
+    font-size: 0.95rem;
+  }}
+  nav {{
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    padding-bottom: 0.25rem;
+  }}
+  nav::-webkit-scrollbar {{
+    display: none;
+  }}
+  .filter {{
+    font-size: 0.7rem;
+    padding: 0.3rem 0.5rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }}
+  .page-grid {{
+    padding: 0.75rem 0.75rem 2rem;
+  }}
+  .article-item {{
+    padding: 0.6rem 0;
+  }}
+  .article-title {{
+    font-size: 0.95rem;
+  }}
+  .article-desc {{
+    font-size: 0.8rem;
+  }}
+  .ts-title {{
+    font-size: 1.05rem;
+  }}
+  .latest-title {{
+    font-size: 0.9rem;
+  }}
+  .latest-item {{
+    padding: 0.65rem 0;
+  }}
+  .source-section {{
+    padding: 0.75rem 0;
+  }}
+  .category-block {{
+    margin-top: 1rem;
+  }}
+  .hero-section {{
+    padding: 0.5rem 0 1rem;
+  }}
+  .hero-eyebrow {{
+    font-size: 0.6rem;
+  }}
+  #refresh-banner {{
+    bottom: 1rem;
+    font-size: 0.72rem;
+    padding: 0.5rem 1rem;
+  }}
+  footer {{
+    padding: 0.5rem 0.75rem;
+    font-size: 0.6rem;
+  }}
+}}
+
+@media (max-width: 380px) {{
+  .hero-img {{
+    max-height: 180px;
+  }}
+  .hero-section h2 {{
+    font-size: 1.3rem;
+  }}
+  .filter {{
+    font-size: 0.65rem;
+    padding: 0.25rem 0.4rem;
+  }}
 }}
 
 /* Refresh banner */
