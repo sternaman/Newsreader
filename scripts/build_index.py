@@ -24,9 +24,13 @@ import shutil
 import sys
 import urllib.request
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None  # fallback below
 
 # Ensure Unicode article titles print cleanly on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
@@ -49,8 +53,7 @@ _FALLBACK_SERIF = "Georgia, 'Times New Roman', serif"
 _SOURCE_PRIORITY = ["Bloomberg", "Bloomberg Weekends", "Businessweek"]
 
 # Bloomberg mobile API section endpoints in descending editorial priority.
-# Each page has top_single_story (hero) and top_stories modules that mirror
-# the bloomberg.com homepage prominence ordering.
+# Each page has featured modules that mirror the bloomberg.com homepage.
 _BB_SECTION_ENDPOINTS = [
     "/wssmobile/v1/pages/business/phx-markets",
     "/wssmobile/v1/pages/business/phx-economics-v2",
@@ -60,22 +63,117 @@ _BB_SECTION_ENDPOINTS = [
     "/wssmobile/v1/pages/business/phx-industries",
     "/wssmobile/v1/pages/business/phx-wealth",
     "/wssmobile/v1/pages/business/phx-green",
+    "/wssmobile/v1/pages/business/phx-commodities",
+    "/wssmobile/v1/pages/business/phx-etfs",
+    "/wssmobile/v1/pages/business/phx-crypto",
+    "/wssmobile/v1/pages/technology/phx-technology",
+    "/wssmobile/v1/pages/technology/phx-screentime",
+    "/wssmobile/v1/pages/pursuits/phx-pursuits",
 ]
-_BB_FEATURED_MODULES = {"top_single_story", "top_stories", "top_stories_1"}
+# All module IDs that contain stories relevant to the homepage.
+# topic_package_* and video_package are wildcard-matched at runtime.
+_BB_FEATURED_MODULES = {
+    "top_single_story", "top_stories", "top_stories_1",
+    "top_story", "feature_story", "featured_story",
+    "top_stories_grid", "archive_story_list", "archive_stories_list",
+}
+def _is_featured_module(mod_id: str) -> bool:
+    """Check if a module ID should be included for featured titles."""
+    if mod_id in _BB_FEATURED_MODULES:
+        return True
+    # Match topic_package_1, topic_package_2, etc.
+    if mod_id.startswith("topic_package_"):
+        return True
+    # Match video_package
+    if mod_id == "video_package":
+        return True
+    return False
 _BB_API_BASE = "https://cdn-mobapi.bloomberg.com"
 
 
 def _bloomberg_featured_titles() -> list[str]:
     """Return Bloomberg article titles in live homepage prominence order.
 
-    Fetches the major section pages from the Bloomberg mobile API (same API
-    the Calibre recipe uses) and extracts titles from the featured modules
-    (top_single_story, top_stories). Results are round-robin interleaved
-    across sections so the top story from each section alternates.
+    First tries to scrape the bloomberg.com homepage HTML directly. If that
+    fails (403, timeout, etc.), falls back to the mobile API section endpoints.
 
     Returns an empty list on any network or parse failure so callers can
     fall back to the existing feed order gracefully.
     """
+    # Strategy 1: Scrape bloomberg.com homepage HTML
+    titles = _bloomberg_homepage_titles()
+    if titles:
+        return titles
+
+    # Strategy 2: Fall back to mobile API
+    return _bloomberg_api_titles()
+
+
+def _bloomberg_homepage_titles() -> list[str]:
+    """Extract article titles from bloomberg.com homepage HTML."""
+    try:
+        import http.client
+        import ssl
+
+        ctx = ssl.create_default_context()
+        conn = http.client.HTTPSConnection("www.bloomberg.com", context=ctx, timeout=10)
+        conn.request(
+            "GET", "/",
+            headers={
+                "User-Agent": _FONT_UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "identity",
+                "Connection": "keep-alive",
+                "Cache-Control": "no-cache",
+            }
+        )
+        resp = conn.getresponse()
+        if resp.status != 200:
+            conn.close()
+            return []
+        html = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+
+        # Extract titles from multiple HTML patterns Bloomberg uses:
+        # - <a class="...title..." ...>Title</a>
+        # - <h2>...<a ...>Title</a></h2>
+        # - <a class="...headline..." ...>Title</a>
+        # - <h3>...<a ...>Title</a></h3>
+        import re as _re
+
+        seen: set[str] = set()
+        result: list[str] = []
+
+        # Pattern 1: <a href="/news/..." class="...">Title</a> — matches most article links
+        for m in _re.finditer(
+            r'<a[^>]*href="/news/[^"]*"[^>]*>([^<]*(?:(?!<a[^>]*>)<[^<]*)*[^<]*)</a>',
+            html, _re.I | _re.S,
+        ):
+            t = _re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            t = _re.sub(r"\s+", " ", t)
+            if len(t) > 10 and t not in seen:
+                seen.add(t)
+                result.append(t)
+
+        # Pattern 2: <a href="/opinion/..." ...>Title</a>
+        for m in _re.finditer(
+            r'<a[^>]*href="/opinion/[^"]*"[^>]*>([^<]*(?:(?!<a[^>]*>)<[^<]*)*[^<]*)</a>',
+            html, _re.I | _re.S,
+        ):
+            t = _re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            t = _re.sub(r"\s+", " ", t)
+            if len(t) > 10 and t not in seen:
+                seen.add(t)
+                result.append(t)
+
+        return result
+    except Exception:
+        return []
+
+
+def _bloomberg_api_titles() -> list[str]:
+    """Return titles from Bloomberg mobile API section endpoints."""
     featured_per_section: list[list[str]] = []
     for path in _BB_SECTION_ENDPOINTS:
         try:
@@ -88,7 +186,7 @@ def _bloomberg_featured_titles() -> list[str]:
             data = json.loads(gzip.decompress(raw))
             titles: list[str] = []
             for mod in data.get("modules", []):
-                if mod.get("id") in _BB_FEATURED_MODULES:
+                if _is_featured_module(mod.get("id", "")):
                     for story in mod.get("stories") or []:
                         t = (story.get("title") or "").strip()
                         if t:
@@ -117,17 +215,18 @@ def _title_key(title: str) -> str:
 # Utilities
 # ---------------------------------------------------------------------------
 
-def _format_ts(ts: datetime) -> str:
-    """Format a datetime as a concise publish time.
+# Global timezone for display (set by --timezone arg in main())
+_DISPLAY_TZ = None
 
-    Same day  → '2:34 PM'
-    Yesterday → 'Yesterday 2:34 PM'
-    Older     → 'Apr 28, 2:34 PM'
-    """
-    today = datetime.now().date()
+
+def _format_ts(ts: datetime) -> str:
+    """Format a datetime as a concise publish time in the configured display timezone."""
+    if _DISPLAY_TZ:
+        ts = ts.astimezone(_DISPLAY_TZ)
+    today = datetime.now(_DISPLAY_TZ).date()
     ts_date = ts.date()
-    # %I gives zero-padded hour; lstrip removes it ("02:34" → "2:34")
-    time_str = ts.strftime("%I:%M %p").lstrip("0") or "12:00 AM"
+    time_str = ts.strftime("%I:%M %p")
+    time_str = time_str[1:] if time_str.startswith("0") else time_str
     delta = (today - ts_date).days
     if delta == 0:
         return time_str
@@ -161,20 +260,40 @@ def _feed_num(path: str) -> int:
 
 # Matches "Updated on Apr 21, 2026 at 10:00 PM" or "Published on ..."
 _AUTH_TS_RE = re.compile(
-    r"(?:Updated|Published) on ([A-Za-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M)",
+    r"((?:Updated|Published) on ([A-Za-z]+ \d{1,2}, \d{4} at \d{1,2}:\d{2} [AP]M))",
     re.I,
 )
 
 
-def _parse_article_ts(html_text: str, fallback: datetime) -> datetime:
-    """Extract publication datetime from the Calibre auth line, or return fallback."""
+def _parse_article_ts(html_text: str, fallback: datetime) -> tuple[datetime, str | None]:
+    """Extract publication datetime from the Calibre auth line, or return fallback.
+
+    The container runs with TZ=America/Chicago, so the timestamps Calibre embeds
+    are already in Chicago time. We attach the display timezone directly so
+    _format_ts renders them as-is (no double-conversion).
+
+    Returns (datetime, full_auth_match) where full_auth_match is the matched text
+    (group 1) for in-place replacement, or None if no match.
+    """
     m = _AUTH_TS_RE.search(html_text)
     if m:
         try:
-            return datetime.strptime(m.group(1), "%b %d, %Y at %I:%M %p")
+            dt = datetime.strptime(m.group(2), "%b %d, %Y at %I:%M %p")
+            tz = _DISPLAY_TZ if _DISPLAY_TZ else timezone.utc
+            return dt.replace(tzinfo=tz), m.group(1)
         except ValueError:
             pass
-    return fallback
+    tz = _DISPLAY_TZ if _DISPLAY_TZ else timezone.utc
+    fb = fallback.replace(tzinfo=tz) if fallback.tzinfo is None else fallback
+    return fb, None
+
+
+def _reading_time(html_text: str) -> int:
+    """Estimate reading time in minutes (~250wpm). Returns 0 for empty content."""
+    text = re.sub(r"<[^>]+>", " ", html_text)
+    text = re.sub(r"\s+", " ", text).strip()
+    words = len(text.split())
+    return max(1, round(words / 250)) if words > 20 else 0
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +490,8 @@ def extract_epub(epub_path: Path, out_dir: Path, source: str, pub_date: str) -> 
     articles_by_feed: dict[int, dict] = {}
     # Map epub-relative article path → extracted datetime
     article_ts: dict[str, datetime] = {}
+    # Map epub-relative article path → reading time in minutes
+    article_rt: dict[str, int] = {}
     # Map "feed_N/article_M" → epub-relative path of first usable thumbnail image
     first_images: dict[str, str] = {}
 
@@ -422,7 +543,18 @@ def extract_epub(epub_path: Path, out_dir: Path, source: str, pub_date: str) -> 
 
                 if _is_article_html(rel):
                     # Extract per-article timestamp from auth line
-                    article_ts[rel] = _parse_article_ts(text, epub_dt)
+                    ts, auth_match = _parse_article_ts(text, epub_dt)
+                    article_ts[rel] = ts
+
+                    # Convert UTC timestamp in article to display timezone
+                    if auth_match and _DISPLAY_TZ:
+                        display_ts = ts.astimezone(_DISPLAY_TZ)
+                        time_str = display_ts.strftime("%I:%M %p").lstrip("0") or "12:00 AM"
+                        new_ts = f"Updated on {display_ts.strftime('%b %d, %Y at ')}{time_str}"
+                        text = text.replace(auth_match, new_ts)
+
+                    # Calculate reading time from article body
+                    article_rt[rel] = _reading_time(text)
 
                     # Add back-link nav
                     back = (
@@ -464,6 +596,7 @@ def extract_epub(epub_path: Path, out_dir: Path, source: str, pub_date: str) -> 
                 "date": pub_date,
                 "href": full_href,
                 "ts": ts,
+                "rt": article_rt.get(epub_rel, 0),
                 "thumb": f"articles/{source}-{pub_date}/{thumb_rel}" if thumb_rel else "",
             })
     return result
@@ -667,6 +800,10 @@ def _build_index_html(
             section_order[src].append(sec)
         by_source[src][sec].append(a)
 
+    def _reading_time_html(art: dict) -> str:
+        rt = art.get("rt", 0)
+        return f'<span class="article-reading-time">{rt} min read</span>' if rt else ""
+
     def _article_card(art: dict, show_category: bool = False) -> str:
         thumb_html = (
             f'<a href="{_he(art["href"])}" class="article-thumb-link">'
@@ -676,6 +813,7 @@ def _build_index_html(
         cat_html = (
             f'<span class="article-category">{_he(art["section"])}</span>\n'
         ) if show_category else ""
+        rt_html = _reading_time_html(art)
         return (
             '<li class="article-item">\n'
             + thumb_html
@@ -683,6 +821,7 @@ def _build_index_html(
             + cat_html
             + f'<a class="article-title" href="{_he(art["href"])}">{_he(art["title"])}</a>\n'
             + f'<span class="article-date">{_he(_format_ts(art["ts"]))}</span>\n'
+            + (rt_html + "\n" if rt_html else "")
             + (f'<p class="article-desc">{_he(art["desc"][:140])}</p>\n' if art["desc"] else "")
             + '</div>\n</li>'
         )
@@ -728,12 +867,14 @@ def _build_index_html(
                     f'<img class="ts-img" src="{_he(art["thumb"])}" alt="" loading="lazy">'
                     f'</a>\n'
                 ) if art.get("thumb") else ""
+                rt_html = _reading_time_html(art)
                 return (
                     '<li class="ts-item">\n'
                     + img_html
                     + f'<span class="article-category">{_he(art["section"])}</span>\n'
                     + f'<a class="ts-title" href="{_he(art["href"])}">{_he(art["title"])}</a>\n'
                     + f'<span class="article-date">{_he(_format_ts(art["ts"]))}</span>\n'
+                    + (rt_html + "\n" if rt_html else "")
                     + (f'<p class="article-desc">{_he(art["desc"][:160])}</p>\n' if art["desc"] else "")
                     + '</li>'
                 )
@@ -816,161 +957,170 @@ def _build_index_html(
   --red: #ed1c24;
   --text: #e0e0e0;
   --bg: #111;
-  --gray: #888;
+  --muted: #888;
   --border: #2c2c2c;
   --serif: {serif};
   --body: {body_font};
-  --max: 1100px;
+  --max: 1280px;
 }}
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{ font-family: var(--body); background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; }}
+a {{ color: inherit; text-decoration: none; }}
 
-/* Header */
-header {{ background: #000; position: sticky; top: 0; z-index: 100; }}
+/* Header — black bar like bloomberg.com */
+header {{
+  background: #000; position: sticky; top: 0; z-index: 100;
+  border-bottom: 2px solid var(--red);
+}}
 .header-inner {{
-  max-width: var(--max); margin: 0 auto; padding: 0.55rem 1.25rem;
+  max-width: var(--max); margin: 0 auto; padding: 0.5rem 1.25rem;
   display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap;
 }}
 .site-name {{
-  font-family: var(--serif); font-size: 1.25rem; font-weight: 900;
-  color: #e0e0e0; letter-spacing: -0.01em; white-space: nowrap; text-transform: uppercase;
+  font-family: Arial, sans-serif; font-size: 1.1rem; font-weight: 900;
+  color: #fff; letter-spacing: 0.02em; white-space: nowrap; text-transform: uppercase;
 }}
 nav {{ display: flex; gap: 0.2rem; flex-wrap: wrap; }}
 .filter {{
-  background: none; border: 1px solid rgba(255,255,255,0.25); border-radius: 2px;
-  padding: 0.18rem 0.5rem; cursor: pointer; font-size: 0.7rem;
-  font-family: Arial, sans-serif; color: rgba(255,255,255,0.65);
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  background: none; border: none;
+  padding: 0.25rem 0.6rem; cursor: pointer; font-size: 0.72rem;
+  font-family: Arial, sans-serif; color: rgba(255,255,255,0.6);
+  transition: color 0.15s; border-bottom: 2px solid transparent;
 }}
-.filter:hover, .filter.active {{ background: #e0e0e0; color: #111; border-color: #e0e0e0; }}
+.filter:hover {{ color: #fff; }}
+.filter.active {{ color: #fff; border-bottom-color: var(--red); }}
 
+/* Page layout */
 .page-grid {{
-  max-width: 1280px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem;
-  display: grid; grid-template-columns: 1fr 260px; gap: 0 2.5rem; align-items: start;
+  max-width: var(--max); margin: 0 auto; padding: 1.25rem 1.25rem 3rem;
+  display: grid; grid-template-columns: 1fr 280px; gap: 0 2rem; align-items: start;
 }}
 .main-content {{ min-width: 0; }}
-hr.divider {{ border: none; border-top: 3px solid #444; margin: 0 0 1.75rem; }}
-hr.section-divider {{ border: none; border-top: 1px solid var(--border); margin: 0; }}
+hr.divider {{ border: none; border-top: 1px solid var(--border); margin: 0 0 1.5rem; }}
+hr.section-divider {{ border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }}
 
-/* Latest rail */
+/* Latest rail — right sidebar */
 .latest-rail {{
   position: sticky; top: 4rem;
-  border-left: 3px solid var(--red); padding-left: 1.1rem;
+  border-left: 1px solid var(--border); padding-left: 1rem;
 }}
 .latest-header {{
   font-family: Arial, sans-serif; font-size: 0.65rem; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.14em;
+  text-transform: uppercase; letter-spacing: 0.12em;
   color: var(--red); margin-bottom: 0.75rem;
 }}
 .latest-list {{ list-style: none; }}
 .latest-item {{
-  padding: 0.65rem 0; border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; border-bottom: 1px solid var(--border);
 }}
 .latest-item:first-child {{ padding-top: 0; }}
 .latest-item:last-child {{ border-bottom: none; }}
 .latest-source {{
   display: block; font-family: Arial, sans-serif;
-  font-size: 0.55rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--red); margin-bottom: 0.18rem;
+  font-size: 0.6rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--red); margin-bottom: 0.15rem;
 }}
 .latest-title {{
-  display: block; font-family: var(--serif); font-size: 0.8rem;
-  font-weight: 700; line-height: 1.3; color: var(--text);
-  text-decoration: none; margin-bottom: 0.18rem;
+  display: block; font-family: var(--serif); font-size: 0.85rem;
+  font-weight: 400; line-height: 1.35; color: var(--text);
+  text-decoration: none; margin-bottom: 0.15rem;
 }}
-.latest-title:hover {{ color: var(--red); }}
+.latest-title:hover {{ color: var(--red); text-decoration: underline; }}
 .latest-time {{
-  font-family: Arial, sans-serif; font-size: 0.58rem; color: var(--gray);
+  font-family: Arial, sans-serif; font-size: 0.62rem; color: var(--muted);
 }}
 
-/* Hero — full-width featured story */
-.hero-section {{ padding: 1.5rem 0 2rem; }}
-.hero-img-link {{ display: block; overflow: hidden; margin-bottom: 0.85rem; }}
-.hero-img {{ width: 100%; max-height: 480px; object-fit: cover; display: block; }}
-.hero-img:hover {{ opacity: 0.88; }}
+/* Hero */
+.hero-section {{ padding: 1rem 0 1.5rem; }}
+.hero-img-link {{ display: block; overflow: hidden; margin-bottom: 1rem; }}
+.hero-img {{ width: 100%; max-height: 420px; object-fit: cover; display: block; }}
+.hero-img:hover {{ opacity: 0.92; }}
 .hero-eyebrow {{
-  text-transform: uppercase; font-size: 0.63rem; letter-spacing: 0.14em;
-  color: var(--red); font-weight: 700; margin-bottom: 0.4rem; font-family: Arial, sans-serif;
+  text-transform: uppercase; font-size: 0.65rem; letter-spacing: 0.12em;
+  color: var(--red); font-weight: 700; margin-bottom: 0.35rem; font-family: Arial, sans-serif;
 }}
 .hero-section h2 {{
   font-family: var(--serif); font-size: clamp(1.8rem, 3.5vw, 2.8rem);
-  font-weight: 700; line-height: 1.12; margin-bottom: 0.55rem; max-width: 800px;
+  font-weight: 700; line-height: 1.1; margin-bottom: 0.5rem; max-width: 800px;
 }}
-.hero-section h2 a {{ color: inherit; text-decoration: none; }}
+.hero-section h2 a {{ color: var(--text); }}
 .hero-section h2 a:hover {{ color: var(--red); }}
-.hero-desc {{ font-size: 1rem; line-height: 1.55; color: #aaa; margin-bottom: 0.4rem; max-width: 680px; }}
-.hero-date {{ font-size: 0.67rem; color: var(--gray); font-family: Arial, sans-serif; }}
+.hero-desc {{ font-size: 0.95rem; line-height: 1.5; color: var(--muted); margin-bottom: 0.4rem; max-width: 680px; }}
+.hero-date {{ font-size: 0.65rem; color: var(--muted); font-family: Arial, sans-serif; }}
 
 /* Source sections */
-.source-section {{ padding: 1.5rem 0; }}
+.source-section {{ padding: 1rem 0; }}
 .source-label {{
   display: flex; align-items: baseline; gap: 0.75rem;
-  border-bottom: 3px solid #444; padding-bottom: 0.5rem; margin-bottom: 1.25rem;
+  border-bottom: 2px solid #000; padding-bottom: 0.4rem; margin-bottom: 1rem;
 }}
 .source-name {{
-  font-family: Arial, Helvetica, sans-serif; font-size: 1rem; font-weight: 900;
+  font-family: Arial, Helvetica, sans-serif; font-size: 0.9rem; font-weight: 900;
   color: var(--text); text-transform: uppercase; letter-spacing: 0.03em;
 }}
-.source-date {{ font-size: 0.67rem; color: var(--gray); font-family: Arial, sans-serif; }}
+.source-date {{ font-size: 0.65rem; color: var(--muted); font-family: Arial, sans-serif; }}
 
 /* Category blocks */
-.category-block {{ margin-top: 1.5rem; }}
+.category-block {{ margin-top: 1.25rem; }}
 .category-block:first-of-type {{ margin-top: 0; }}
-.category-label {{ display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.75rem; }}
+.category-label {{ display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }}
 .category-label span {{
-  font-family: Arial, sans-serif; font-size: 0.68rem; font-weight: 700;
-  color: var(--red); text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap;
+  font-family: Arial, sans-serif; font-size: 0.65rem; font-weight: 700;
+  color: var(--red); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap;
 }}
 .category-label::after {{ content: ''; flex: 1; height: 1px; background: var(--border); }}
 
-/* Article grid */
-.article-list {{ list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 2rem; }}
-.article-item {{ padding: 0.85rem 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; }}
+/* Article grid — 3 columns */
+.article-list {{ list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 1.5rem; }}
+.article-item {{ padding: 0.75rem 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; }}
 .article-item:last-child {{ border-bottom: none; }}
-.article-thumb-link {{ display: block; overflow: hidden; margin-bottom: 0.4rem; }}
+.article-thumb-link {{ display: block; overflow: hidden; margin-bottom: 0.35rem; }}
 .article-thumb {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }}
 .article-thumb:hover {{ opacity: 0.85; }}
-.article-body {{ display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }}
+.article-body {{ display: flex; flex-direction: column; gap: 0.15rem; flex: 1; }}
 .article-title {{
   font-family: var(--serif); font-size: 0.9rem; font-weight: 700;
   color: var(--text); text-decoration: none; line-height: 1.3;
 }}
-.article-title:hover {{ color: var(--red); }}
-.article-date {{ font-size: 0.63rem; color: var(--gray); font-family: Arial, sans-serif; }}
+.article-title:hover {{ color: var(--red); text-decoration: underline; }}
+.article-date {{ font-size: 0.62rem; color: var(--muted); font-family: Arial, sans-serif; }}
+.article-reading-time {{ font-size: 0.62rem; color: var(--muted); font-family: Arial, sans-serif; }}
 .article-category {{
   font-size: 0.58rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--red); font-family: Arial, sans-serif;
+  letter-spacing: 0.08em; color: var(--red); font-family: Arial, sans-serif;
 }}
-.article-desc {{ font-size: 0.78rem; color: #aaa; line-height: 1.4; }}
+.article-desc {{ font-size: 0.78rem; color: var(--muted); line-height: 1.4; }}
 
-/* Top Stories block */
+/* Top Stories — 2-col prominent grid */
 .ts-label {{
-  display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem;
+  display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.85rem;
 }}
 .ts-label span {{
-  font-family: Arial, sans-serif; font-size: 0.68rem; font-weight: 700;
-  color: var(--red); text-transform: uppercase; letter-spacing: 0.12em; white-space: nowrap;
+  font-family: Arial, sans-serif; font-size: 0.65rem; font-weight: 700;
+  color: var(--red); text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap;
 }}
 .ts-label::after {{ content: ''; flex: 1; height: 1px; background: var(--border); }}
 .ts-grid {{
   list-style: none;
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem 2.5rem;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.25rem 2rem;
 }}
-.ts-item {{ display: flex; flex-direction: column; gap: 0.25rem; }}
-.ts-img {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; margin-bottom: 0.35rem; }}
+.ts-item {{ display: flex; flex-direction: column; gap: 0.2rem; }}
+.ts-img {{ width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; margin-bottom: 0.3rem; }}
 .ts-img:hover {{ opacity: 0.85; }}
 .ts-title {{
-  font-family: var(--serif); font-size: 1.05rem; font-weight: 700;
-  line-height: 1.25; color: var(--text); text-decoration: none;
+  font-family: var(--serif); font-size: 1rem; font-weight: 700;
+  line-height: 1.2; color: var(--text); text-decoration: none;
 }}
-.ts-title:hover {{ color: var(--red); }}
+.ts-title:hover {{ color: var(--red); text-decoration: underline; }}
 
+/* Footer */
 footer {{
-  border-top: 3px solid #333; padding: 0.85rem 1.25rem;
-  text-align: center; font-size: 0.67rem; color: var(--gray);
-  font-family: Arial, sans-serif; max-width: var(--max); margin: 2rem auto 0;
+  border-top: 2px solid var(--border); padding: 0.75rem 1.25rem;
+  text-align: center; font-size: 0.65rem; color: var(--muted);
+  font-family: Arial, sans-serif; max-width: var(--max); margin: 1.5rem auto 0;
 }}
 
+/* Responsive */
 @media (max-width: 1060px) {{
   .page-grid {{ grid-template-columns: 1fr; }}
   .latest-rail {{ display: none; }}
@@ -984,6 +1134,7 @@ footer {{
   .article-list {{ grid-template-columns: 1fr; }}
 }}
 
+/* Refresh banner */
 #refresh-banner {{
   position: fixed; bottom: 1.5rem; left: 50%;
   transform: translateX(-50%) translateY(120px);
@@ -991,7 +1142,7 @@ footer {{
   padding: 0.55rem 1.25rem; border-radius: 2rem;
   font-family: Arial, sans-serif; font-size: 0.78rem; font-weight: 700;
   cursor: pointer; z-index: 200; white-space: nowrap;
-  box-shadow: 0 4px 18px rgba(0,0,0,0.55);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.35);
   transition: transform 0.3s cubic-bezier(.34,1.56,.64,1);
   border: none;
 }}
@@ -1020,7 +1171,6 @@ footer {{
 <button id="refresh-banner" aria-live="polite" style="display:none"></button>
 <script>
 (function () {{
-  /* Source filter */
   var btns = document.querySelectorAll('.filter');
   btns.forEach(function (btn) {{
     btn.addEventListener('click', function () {{
@@ -1033,7 +1183,6 @@ footer {{
     }});
   }});
 
-  /* Auto-refresh: poll every 20 min, show toast if new articles land */
   var known = new Set();
   document.querySelectorAll('a[href*="articles/"]').forEach(function (a) {{
     known.add(a.pathname);
@@ -1049,19 +1198,12 @@ footer {{
       .then(function (r) {{ return r.text(); }})
       .then(function (html) {{
         var doc = new DOMParser().parseFromString(html, 'text/html');
-
-        /* Count genuinely new articles */
         var count = 0;
         doc.querySelectorAll('a[href*="articles/"]').forEach(function (a) {{
           if (!known.has(a.pathname)) count++;
         }});
-
-        /* Swap latest rail content silently regardless of new-article count */
         var newRail = doc.getElementById('latest-rail');
-        if (newRail && rail) {{
-          rail.innerHTML = newRail.innerHTML;
-        }}
-
+        if (newRail && rail) {{ rail.innerHTML = newRail.innerHTML; }}
         if (count > 0) {{
           banner.textContent = count + ' new article' + (count === 1 ? '' : 's') + ' — Refresh';
           banner.style.display = '';
@@ -1072,7 +1214,6 @@ footer {{
       }})
       .catch(function () {{}});
   }}
-
   setInterval(checkForNew, 20 * 60 * 1000);
 }})();
 </script>
@@ -1118,7 +1259,22 @@ def main() -> None:
         Path(__file__).resolve().parent / "news_sync_docker" / "data" / "news_out"
     )
     parser.add_argument("--out-dir", default=default_out, help="Directory containing .epub files")
+    parser.add_argument(
+        "--timezone",
+        default="America/Chicago",
+        help="Display timezone for article timestamps (default: America/Chicago)",
+    )
     args = parser.parse_args()
+
+    # Set global display timezone
+    global _DISPLAY_TZ
+    if ZoneInfo:
+        _DISPLAY_TZ = ZoneInfo(args.timezone)
+    else:
+        # Fallback: assume UTC offset from env (not ideal but works)
+        _DISPLAY_TZ = None
+        print(f"Warning: zoneinfo not available, timestamps in UTC")
+
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1156,17 +1312,28 @@ def main() -> None:
         except Exception as exc:
             print(f"ERROR processing {epub.name}: {exc}")
 
-    # 6. Fetch live Bloomberg homepage prominence order (best-effort)
+    # 6. Fetch live Bloomberg homepage articles (best-effort)
     bb_featured: list[str] = []
     if any(a["source"] == "Bloomberg" for a in all_articles):
-        print("Fetching Bloomberg homepage prominence order…")
+        print("Fetching Bloomberg homepage articles…")
         try:
             bb_featured = _bloomberg_featured_titles()
             print(f"  {len(bb_featured)} featured titles retrieved")
         except Exception as exc:
             print(f"  WARNING: could not fetch Bloomberg prominence: {exc}")
 
-    # 7. Build index.html
+    # 7. Filter Bloomberg articles to only those on the live homepage
+    if bb_featured:
+        featured_keys = {_title_key(t) for t in bb_featured}
+        before = len(all_articles)
+        all_articles = [
+            a for a in all_articles
+            if a["source"] != "Bloomberg" or _title_key(a["title"]) in featured_keys
+        ]
+        if before != len(all_articles):
+            print(f"  Filtered Bloomberg: {before} → {len(all_articles)} articles")
+
+    # 8. Build index.html
     index_html = _build_index_html(all_articles, font_css, bb_featured=bb_featured)
     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
     print(f"Wrote index.html — {len(all_articles)} articles from {len(epubs)} sources")
