@@ -839,12 +839,151 @@ def _write_reader_css(out_dir: Path, fonts_available: bool) -> None:
     (out_dir / "reader.css").write_text(css, encoding="utf-8")
 
 
+def _write_pwa_files(out_dir: Path) -> None:
+    """Write manifest.json and sw.js for PWA support."""
+    import json as _json
+
+    manifest = {
+        "name": "Bloomberg News",
+        "short_name": "Bloomberg",
+        "description": "Bloomberg news reader",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#111111",
+        "theme_color": "#111111",
+        "orientation": "portrait-primary",
+        "categories": ["news"],
+        "icons": [
+            {
+                "src": "data:image/svg+xml," + urllib.parse.quote(
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+                    '<rect width="512" height="512" rx="48" fill="#111"/>'
+                    '<text x="256" y="340" text-anchor="middle" font-family="Arial,sans-serif" '
+                    'font-weight="900" font-size="280" fill="#ed1c24">B</text></svg>'
+                ),
+                "sizes": "512x512",
+                "type": "image/svg+xml",
+                "purpose": "any maskable"
+            }
+        ]
+    }
+    (out_dir / "manifest.json").write_text(
+        _json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+
+    sw_js = """\
+var CACHE = 'bloomberg-news-v1';
+var URLS = ['/', '/index.html', '/reader.css', '/manifest.json'];
+
+self.addEventListener('install', function(e) {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', function(e) {
+  e.waitUntil(clients.claim());
+});
+
+self.addEventListener('fetch', function(e) {
+  if (e.request.method !== 'GET') return;
+  e.respondWith(
+    fetch(e.request)
+      .then(function(r) {
+        if (r.ok) {
+          var clone = r.clone();
+          caches.open(CACHE).then(function(c) { c.put(e.request, clone); });
+        }
+        return r;
+      })
+      .catch(function() {
+        return caches.open(CACHE).then(function(c) {
+          return c.match(e.request);
+        });
+      })
+  );
+});
+"""
+    (out_dir / "sw.js").write_text(sw_js, encoding="utf-8")
+
+
+def _write_pwa_files(out_dir: Path) -> None:
+    """Write manifest.json and sw.js for PWA support."""
+    import json as _json
+    
+    manifest = {
+        "name": "Bloomberg News",
+        "short_name": "Bloomberg",
+        "description": "Bloomberg news reader",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#111111",
+        "theme_color": "#111111",
+        "orientation": "portrait-primary",
+        "categories": ["news"],
+        "icons": [
+            {
+                "src": "data:image/svg+xml," + urllib.parse.quote(
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+                    '<rect width="512" height="512" rx="48" fill="#111"/>'
+                    '<text x="256" y="340" text-anchor="middle" font-family="Arial,sans-serif" '
+                    'font-weight="900" font-size="280" fill="#ed1c24">B</text></svg>'
+                ),
+                "sizes": "512x512",
+                "type": "image/svg+xml",
+                "purpose": "any maskable"
+            }
+        ]
+    }
+    (out_dir / "manifest.json").write_text(
+        _json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+    
+    sw_js = """\
+var CACHE = 'bloomberg-news-v1';
+var URLS = ['/', '/index.html', '/reader.css', '/manifest.json'];
+
+self.addEventListener('install', function(e) {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', function(e) {
+  e.waitUntil(clients.claim());
+});
+
+self.addEventListener('fetch', function(e) {
+  if (e.request.method !== 'GET') return;
+  e.respondWith(
+    fetch(e.request)
+      .then(function(r) {
+        if (r.ok) {
+          var clone = r.clone();
+          caches.open(CACHE).then(function(c) { c.put(e.request, clone); });
+        }
+        return r;
+      })
+      .catch(function() {
+        return caches.open(CACHE).then(function(c) {
+          return c.match(e.request);
+        });
+      })
+  );
+});
+"""
+    (out_dir / "sw.js").write_text(sw_js, encoding="utf-8")
+
+
 def _build_index_html(
     all_articles: list[dict],
     font_css: str,
     bb_featured: list[str] | None = None,
 ) -> str:
     """Produce the Bloomberg-style index.html as a string."""
+
+    _PWA_ICON = urllib.parse.quote(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">'
+        '<rect width="512" height="512" rx="48" fill="#111"/>'
+        '<text x="256" y="340" text-anchor="middle" font-family="Arial,sans-serif" '
+        'font-weight="900" font-size="280" fill="#ed1c24">B</text></svg>'
+    )
 
     # Normalize featured titles to keys for fast lookup
     _bb_featured: dict[str, int] = (
@@ -1069,6 +1208,8 @@ def _build_index_html(
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="data:image/svg+xml,{_PWA_ICON}">
 <style>
 {font_css}
 
@@ -1323,8 +1464,11 @@ footer {{
     display: none;
   }}
   .filter {{
-    font-size: 0.7rem;
-    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+    padding: 0.5rem 0.75rem;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
     white-space: nowrap;
     flex-shrink: 0;
   }}
@@ -1332,10 +1476,14 @@ footer {{
     padding: 0.75rem 0.75rem 2rem;
   }}
   .article-item {{
-    padding: 0.6rem 0;
+    padding: 0.75rem 0;
+    min-height: auto;
   }}
   .article-title {{
     font-size: 0.95rem;
+    display: block;
+    padding: 0.25rem 0;
+    margin: -0.25rem 0;
   }}
   .article-desc {{
     font-size: 0.8rem;
@@ -1345,9 +1493,13 @@ footer {{
   }}
   .latest-title {{
     font-size: 0.9rem;
+    display: block;
+    padding: 0.2rem 0;
+    margin: -0.2rem 0;
   }}
   .latest-item {{
-    padding: 0.65rem 0;
+    padding: 0.75rem 0;
+    min-height: auto;
   }}
   .source-section {{
     padding: 0.75rem 0;
@@ -1380,8 +1532,9 @@ footer {{
     font-size: 1.3rem;
   }}
   .filter {{
-    font-size: 0.65rem;
-    padding: 0.25rem 0.4rem;
+    font-size: 0.75rem;
+    padding: 0.5rem 0.6rem;
+    min-height: 40px;
   }}
 }}
 
@@ -1467,6 +1620,58 @@ footer {{
   }}
   setInterval(checkForNew, 20 * 60 * 1000);
 }})();
+
+  // Service worker registration
+  if ('serviceWorker' in navigator) {{
+    navigator.serviceWorker.register('sw.js')
+      .then(function(reg) {{ console.log('SW registered'); }})
+      .catch(function() {{}});
+  }}
+
+  // Pull-to-refresh indicator
+  var touchStartY = 0;
+  var isRefreshing = false;
+  var ptrIndicator = null;
+
+  document.addEventListener('touchstart', function(e) {{
+    if (window.scrollY === 0) {{
+      touchStartY = e.touches[0].clientY;
+    }}
+  }}, {{passive: true}});
+
+  document.addEventListener('touchmove', function(e) {{
+    if (isRefreshing || window.scrollY > 0) return;
+    var dy = e.touches[0].clientY - touchStartY;
+    if (dy < 80) return;
+    if (!ptrIndicator) {{
+      ptrIndicator = document.createElement('div');
+      ptrIndicator.style.cssText = 'position:fixed;top:0;left:0;right:0;height:40px;' +
+        'background:var(--red);display:flex;align-items:center;justify-content:center;' +
+        'color:#fff;font-family:Arial,sans-serif;font-size:13px;font-weight:700;' +
+        'z-index:300;transform:translateY(-100%);transition:transform 0.2s;';
+      ptrIndicator.textContent = 'Refreshing...';
+      document.body.appendChild(ptrIndicator);
+    }}
+    var progress = Math.min((dy - 80) / 120, 1);
+    ptrIndicator.style.transform = 'translateY(' + (-100 + progress * 100) + '%)';
+    if (progress >= 1 && !isRefreshing) {{
+      isRefreshing = true;
+      ptrIndicator.style.transform = 'translateY(0)';
+      location.reload();
+    }}
+  }}, {{passive: true}});
+
+  document.addEventListener('touchend', function() {{
+    if (ptrIndicator && !isRefreshing) {{
+      ptrIndicator.style.transform = 'translateY(-100%)';
+      setTimeout(function() {{
+        if (ptrIndicator && ptrIndicator.parentNode) {{
+          ptrIndicator.parentNode.removeChild(ptrIndicator);
+          ptrIndicator = null;
+        }}
+      }}, 300);
+    }}
+  }}, {{passive: true}});
 </script>
 </body>
 </html>"""
@@ -1550,6 +1755,9 @@ def main() -> None:
     # 4. reader.css for article pages
     _write_reader_css(out_dir, fonts_available)
 
+    # 4b. PWA manifest and service worker
+    _write_pwa_files(out_dir)
+
     # 5. Extract EPUBs → articles/, collect metadata
     all_articles: list[dict] = []
     for epub in epubs:
@@ -1584,7 +1792,7 @@ def main() -> None:
         if before != len(all_articles):
             print(f"  Filtered Bloomberg: {before} → {len(all_articles)} articles")
 
-    # 8. Build index.html
+    # 9. Build index.html
     index_html = _build_index_html(all_articles, font_css, bb_featured=bb_featured)
     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
     print(f"Wrote index.html — {len(all_articles)} articles from {len(epubs)} sources")
