@@ -723,14 +723,12 @@ p {{
   font-size: 1.05em;
 }}
 
-/* Calibre-generated classes — normalize to body defaults */
+/* Calibre-generated classes — only normalize font/text, never margin/padding */
 .calibre, .calibre2, .calibre5, .calibre7, .calibre8, .calibre9, .calibre10, .calibre13 {{
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
   color: inherit;
-  margin: inherit;
-  padding: inherit;
 }}
 
 .calibre6 {{
@@ -738,20 +736,24 @@ p {{
   height: auto;
 }}
 
+/* .toc-section is the main content wrapper — don't add margins/padding */
 .toc-section {{
   margin: 0;
   padding: 0;
 }}
 
+/* .calibre-nuked-tag-figure wraps images + captions */
 .calibre-nuked-tag-figure {{
   margin: 1.5rem 0;
   padding: 0;
 }}
 
+/* .img wraps <img> + caption div */
 .img {{
   margin: 1.5rem 0;
 }}
 
+/* Image captions */
 .img-cap, .figc, .news-figure-caption-text {{
   font-size: 0.8rem;
   text-align: center;
@@ -760,6 +762,7 @@ p {{
   margin-bottom: 1.5rem;
 }}
 
+/* Image credits */
 .news-figure-credit {{
   font-size: 0.75rem;
   color: var(--muted);
@@ -769,6 +772,7 @@ p {{
   text-align: right;
 }}
 
+/* .cat is a category/source label */
 .cat {{
   font-size: 0.7rem;
   font-weight: 700;
@@ -778,15 +782,7 @@ p {{
   font-family: Arial, sans-serif;
 }}
 
-.news-rsf-table-string, .news-rsf-table-string1 {{
-  font-size: 0.85em;
-  color: var(--muted);
-}}
-
-.calibre_article_list {{
-  display: none;
-}}
-
+/* Twitter embeds */
 .twitter-tweet {{
   margin: 1.5rem 0;
   border: 1px solid var(--border);
@@ -812,7 +808,7 @@ blockquote {{
   font-style: italic;
 }}
 
-/* Tables */
+/* Tables in articles */
 table {{
   width: 100%;
   max-width: 100%;
@@ -900,13 +896,6 @@ a:hover {{
   }}
   th, td {{
     padding: 0.4rem 0.5rem;
-  }}
-  .img-cap, .figc, .news-figure-caption-text {{
-    font-size: 0.75rem;
-    margin-top: -0.75rem;
-  }}
-  .news-figure-credit {{
-    font-size: 0.7rem;
   }}
 }}
 
