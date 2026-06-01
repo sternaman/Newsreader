@@ -530,6 +530,10 @@ def extract_epub(epub_path: Path, out_dir: Path, source: str, pub_date: str) -> 
                 total_up = EXTRACT_DEPTH + depth_within
                 up = "../" * total_up
 
+                # Strip XML declaration and namespace — prevent browser from parsing as XML
+                text = re.sub(r'^\s*<\?xml[^?]*\?>\s*', '', text, flags=re.S)
+                text = text.replace(' xmlns="http://www.w3.org/1999/xhtml"', '')
+
                 # Remove existing Calibre stylesheet links
                 text = re.sub(
                     r'<link[^>]+href="[^"]*(?:stylesheet|page_styles)\.css"[^>]*/?>',
@@ -723,12 +727,12 @@ p {{
   font-size: 1.05em;
 }}
 
-/* Calibre-generated classes — only normalize font/text, never margin/padding */
+/* Calibre-generated classes — use !important to override any Calibre inline styles */
 .calibre, .calibre2, .calibre5, .calibre7, .calibre8, .calibre9, .calibre10, .calibre13 {{
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
-  color: inherit;
+  font-family: 'Source Serif 4', {fallback} !important;
+  font-size: 1em !important;
+  line-height: 1.7 !important;
+  color: var(--text) !important;
 }}
 
 .calibre6 {{
