@@ -646,7 +646,7 @@ html {{
 
 body {{
   font-family: 'Source Serif 4', {fallback};
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1.7;
   color: var(--text);
   margin: 0;
@@ -682,7 +682,7 @@ body {{
 /* Typography */
 h1 {{
   font-family: 'Playfair Display', {fallback};
-  font-size: clamp(1.6rem, 5vw, 2rem);
+  font-size: clamp(2rem, 6vw, 2.5rem);
   font-weight: 700;
   line-height: 1.2;
   margin-bottom: 0.5rem;
@@ -690,19 +690,19 @@ h1 {{
 
 h2 {{
   font-family: 'Playfair Display', {fallback};
-  font-size: clamp(1.3rem, 4vw, 1.5rem);
+  font-size: clamp(1.5rem, 4.5vw, 1.8rem);
   margin: 1.5rem 0 0.5rem;
 }}
 
 h3 {{
   font-family: 'Playfair Display', {fallback};
-  font-size: clamp(1.1rem, 3.5vw, 1.25rem);
+  font-size: clamp(1.2rem, 4vw, 1.4rem);
   margin: 1.25rem 0 0.4rem;
 }}
 
 h4 {{
   font-family: 'Playfair Display', {fallback};
-  font-size: 1.05rem;
+  font-size: 1.15rem;
   margin: 1rem 0 0.3rem;
 }}
 
@@ -728,7 +728,13 @@ p {{
 }}
 
 /* Calibre-generated classes — use !important to override any Calibre inline styles */
-.calibre, .calibre2, .calibre5, .calibre7, .calibre8, .calibre9, .calibre10, .calibre13 {{
+/* .calibre is used on headings — only normalize color, let heading rules handle size */
+.calibre {{
+  color: var(--text) !important;
+}}
+
+/* .calibre2 (body), .calibre5 (paragraphs), .calibre7-10, .calibre13 — full normalization */
+.calibre2, .calibre5, .calibre7, .calibre8, .calibre9, .calibre10, .calibre13 {{
   font-family: 'Source Serif 4', {fallback} !important;
   font-size: 1em !important;
   line-height: 1.7 !important;
@@ -862,7 +868,7 @@ a:hover {{
 /* Mobile (600px) */
 @media (max-width: 600px) {{
   body {{
-    font-size: 17px;
+    font-size: 19px;
     line-height: 1.65;
     padding: 0.75rem;
   }}
@@ -874,13 +880,13 @@ a:hover {{
     padding: 0.5rem 0;
   }}
   h1 {{
-    font-size: clamp(1.5rem, 7vw, 1.8rem);
+    font-size: clamp(1.8rem, 7vw, 2.2rem);
   }}
   h2 {{
-    font-size: clamp(1.2rem, 5vw, 1.4rem);
+    font-size: clamp(1.4rem, 5vw, 1.6rem);
   }}
   h3 {{
-    font-size: clamp(1.05rem, 4.5vw, 1.2rem);
+    font-size: clamp(1.15rem, 4.5vw, 1.3rem);
   }}
   img {{
     margin: 1.25rem 0;
@@ -906,7 +912,7 @@ a:hover {{
 /* Desktop (900px) */
 @media (min-width: 900px) {{
   body {{
-    font-size: 19px;
+    font-size: 21px;
   }}
 }}
 """
