@@ -651,6 +651,7 @@ body {{
   overflow-x: hidden;
 }}
 
+/* Content container */
 .back-nav {{
   max-width: 680px;
   margin: 0 auto 1.5rem;
@@ -674,6 +675,7 @@ body {{
   margin: 0 auto;
 }}
 
+/* Typography */
 h1 {{
   font-family: 'Playfair Display', {fallback};
   font-size: clamp(1.6rem, 5vw, 2rem);
@@ -721,6 +723,78 @@ p {{
   font-size: 1.05em;
 }}
 
+/* Calibre-generated classes — normalize to body defaults */
+.calibre, .calibre2, .calibre5, .calibre7, .calibre8, .calibre9, .calibre10, .calibre13 {{
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  margin: inherit;
+  padding: inherit;
+}}
+
+.calibre6 {{
+  max-width: 100%;
+  height: auto;
+}}
+
+.toc-section {{
+  margin: 0;
+  padding: 0;
+}}
+
+.calibre-nuked-tag-figure {{
+  margin: 1.5rem 0;
+  padding: 0;
+}}
+
+.img {{
+  margin: 1.5rem 0;
+}}
+
+.img-cap, .figc, .news-figure-caption-text {{
+  font-size: 0.8rem;
+  text-align: center;
+  color: var(--muted);
+  margin-top: -1rem;
+  margin-bottom: 1.5rem;
+}}
+
+.news-figure-credit {{
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-style: italic;
+  margin-top: 0.25rem;
+  margin-bottom: 1rem;
+  text-align: right;
+}}
+
+.cat {{
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--red);
+  font-family: Arial, sans-serif;
+}}
+
+.news-rsf-table-string, .news-rsf-table-string1 {{
+  font-size: 0.85em;
+  color: var(--muted);
+}}
+
+.calibre_article_list {{
+  display: none;
+}}
+
+.twitter-tweet {{
+  margin: 1.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}}
+
+/* Images */
 img {{
   max-width: 100%;
   height: auto;
@@ -729,6 +803,7 @@ img {{
   border-radius: 2px;
 }}
 
+/* Blockquotes */
 blockquote {{
   border-left: 3px solid var(--red);
   margin: 1.5rem 0;
@@ -737,15 +812,7 @@ blockquote {{
   font-style: italic;
 }}
 
-.img-cap, .figc {{
-  font-size: 0.8rem;
-  text-align: center;
-  color: var(--muted);
-  margin-top: -1rem;
-  margin-bottom: 1.5rem;
-}}
-
-/* Tables in articles */
+/* Tables */
 table {{
   width: 100%;
   max-width: 100%;
@@ -787,12 +854,12 @@ a:hover {{
   text-decoration: underline;
 }}
 
-/* Hide Calibre internal markers */
+/* Hide Calibre internals */
 .x4-chap-marker {{ display: none !important; }}
 .calibre_navbar {{ display: none !important; }}
 .toc-page {{ display: none !important; }}
 
-/* Mobile adjustments */
+/* Mobile (600px) */
 @media (max-width: 600px) {{
   body {{
     font-size: 17px;
@@ -809,7 +876,19 @@ a:hover {{
   h1 {{
     font-size: clamp(1.5rem, 7vw, 1.8rem);
   }}
+  h2 {{
+    font-size: clamp(1.2rem, 5vw, 1.4rem);
+  }}
+  h3 {{
+    font-size: clamp(1.05rem, 4.5vw, 1.2rem);
+  }}
   img {{
+    margin: 1.25rem 0;
+  }}
+  .img {{
+    margin: 1.25rem 0;
+  }}
+  .calibre-nuked-tag-figure {{
     margin: 1.25rem 0;
   }}
   blockquote {{
@@ -822,9 +901,16 @@ a:hover {{
   th, td {{
     padding: 0.4rem 0.5rem;
   }}
+  .img-cap, .figc, .news-figure-caption-text {{
+    font-size: 0.75rem;
+    margin-top: -0.75rem;
+  }}
+  .news-figure-credit {{
+    font-size: 0.7rem;
+  }}
 }}
 
-/* Larger desktop */
+/* Desktop (900px) */
 @media (min-width: 900px) {{
   body {{
     font-size: 19px;
