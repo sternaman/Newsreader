@@ -541,9 +541,10 @@ def extract_epub(epub_path: Path, out_dir: Path, source: str, pub_date: str) -> 
                     text,
                     flags=re.I,
                 )
-                # Insert reader.css before </head>
+                # Insert viewport meta + reader.css before </head>
+                viewport = '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
                 style_link = f'<link rel="stylesheet" href="{up}reader.css">\n'
-                text = re.sub(r"(</head>)", style_link + r"\1", text, count=1, flags=re.I)
+                text = re.sub(r"(</head>)", viewport + style_link + r"\1", text, count=1, flags=re.I)
 
                 if _is_article_html(rel):
                     # Extract per-article timestamp from auth line
