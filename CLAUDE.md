@@ -56,3 +56,12 @@ feed_N/article_M/        ← Article directory
   images/                ← Inline images (relative refs from HTML)
 stylesheet.css           ← Calibre CSS (stripped by build_index.py, replaced with reader.css)
 ```
+
+## Reader CSS (build_index.py)
+
+Calibre generates article HTML with auto-numbered classes (`.calibre`, `.calibre2`, `.calibre5`, `.calibre6`, `.calibre7-13`) and structural wrappers (`.toc-section`, `.article1`, `.cat`, `.news-figure-credit`). `build_index.py` injects `<meta name="viewport">` + `<link rel="stylesheet" href="reader.css">` before `</head>`, strips the `<?xml?>` declaration and `xmlns` namespace, removes Calibre CSS links, and adds a back-nav div.
+
+Key CSS decisions:
+- `.calibre` (used on `<h1>`) only sets `color: var(--text) !important` — heading sizes come from `h1/h2/h3` rules
+- `.calibre2/.calibre5/.calibre7-13` get full `font-family/font-size/line-height/color !important` to override any Calibre inline styles
+- Body: 20px base, 19px mobile, 21px desktop. Headings use `clamp()` for responsive sizing.
